@@ -54,12 +54,16 @@ const maxLostFrames = 8;
 let socket = null;
 
 function connectOSCBridge() {
-
-    socket = new WebSocket(
-        "ws://172.20.10.3:8080"
-    );
+    socket = new WebSocket("wss://recovery-nose-evanescence-wolf.trycloudflare.com");
 
     socket.onopen = function () {
+
+
+        
+
+
+
+
 
         console.log(
             "Connected to OSC Bridge!"
