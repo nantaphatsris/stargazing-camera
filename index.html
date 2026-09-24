@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>Stargazing Camera</title>
+
+    <link rel="stylesheet" href="style.css">
+
+</head>
+
+
+<body>
+
+    <!-- กล้องมือถือ -->
+    <video id="camera" autoplay playsinline></video>
+
+    <canvas id="processingCanvas"></canvas>
+
+    <canvas id="overlayCanvas"></canvas>
+
+    <!-- จุดเล็งตรงกลาง -->
+    <div id="crosshair"></div>
+
+    <div id="coordinates">
+
+    X: <span id="x">0.00</span>
+    
+    <br>
+
+    Y: <span id="y">0.00</span>
+
+</div>
+
+
+<div id="status">
+    กำลังรอ OpenCV...
+</div>
+
+
+
+    <!-- ปุ่มเปิดกล้อง -->
+    <button id="startButton">
+        เปิดกล้อง
+    </button>
+
+
+    <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+    <script src="script.js"></script>
+
+</body>
+
+</html>
