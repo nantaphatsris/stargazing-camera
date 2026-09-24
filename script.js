@@ -1,6 +1,7 @@
 // ========================================
 // STARGAZING
 // Camera + OpenCV + TV Detection + X/Y
+// + WebSocket → Node.js → OSC
 // ========================================
 
 
@@ -44,6 +45,48 @@ let lastTVPoints = null;
 let lostFrames = 0;
 
 const maxLostFrames = 8;
+
+
+// ========================================
+// WebSocket → Node.js
+// ========================================
+
+let socket = null;
+
+function connectOSCBridge() {
+
+    socket = new WebSocket(
+        "ws://172.20.10.3:8080"
+    );
+
+    socket.onopen = function () {
+
+        console.log(
+            "Connected to OSC Bridge!"
+        );
+
+    };
+
+    socket.onclose = function () {
+
+        console.log(
+            "Disconnected from OSC Bridge"
+        );
+
+    };
+
+    socket.onerror = function (error) {
+
+        console.error(
+            "WebSocket Error:",
+            error
+        );
+
+    };
+
+}
+
+connectOSCBridge();
 
 
 // ========================================
@@ -171,6 +214,7 @@ function startDetection() {
             startDetection,
             500
         );
+
 
         return;
 
@@ -517,6 +561,27 @@ function calculateXY(
             y.toFixed(2);
 
 
+        // ========================================
+        // ส่ง X/Y ไป Node.js ผ่าน WebSocket
+        // ========================================
+
+        if (
+            socket &&
+            socket.readyState === WebSocket.OPEN
+        ) {
+
+            socket.send(
+                JSON.stringify({
+
+                    x: x,
+                    y: y
+
+                })
+            );
+
+        }
+
+
         // --------------------------------
         // Cleanup
         // --------------------------------
@@ -754,6 +819,7 @@ function detectTV() {
 
 
             // ขนาดเล็กเกินไป
+
             if (area < 5000) {
 
                 contour.delete();
