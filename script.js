@@ -61,7 +61,7 @@ let websocketConnected = false;
 // ========================================
 
 const WEBSOCKET_URL = "wss://recovery-nose-evanescence-wolf.trycloudflare.com";
-const HTTP_URL = "http://172.20.10.3:8080/xy";
+const HTTP_URL = "https://continues-wide-poultry-dev.trycloudflare.com/xy";
 
 
 // ========================================
