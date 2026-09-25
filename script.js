@@ -60,8 +60,8 @@ let websocketConnected = false;
 // CLOUDFLARE WEBSOCKET URL
 // ========================================
 
-const WEBSOCKET_URL =
-    "wss://recovery-nose-evanescence-wolf.trycloudflare.com";
+const WEBSOCKET_URL = "wss://recovery-nose-evanescence-wolf.trycloudflare.com";
+const HTTP_URL = "http://172.20.10.3:8080/xy";
 
 
 // ========================================
@@ -201,33 +201,12 @@ function sendXYToServer(
 ) {
 
     // --------------------------------
-    // ยังไม่ได้เชื่อมต่อ
-    // --------------------------------
-
-    if (
-
-        !websocketConnected ||
-
-        !socket ||
-
-        socket.readyState !==
-            WebSocket.OPEN
-
-    ) {
-
-        return;
-
-    }
-
-
-    // --------------------------------
     // จำกัดความถี่
     // 50 ms = 20 ครั้ง / วินาที
     // --------------------------------
 
     const now =
         performance.now();
-
 
     if (
         now - lastSendTime <
@@ -237,7 +216,6 @@ function sendXYToServer(
         return;
 
     }
-
 
     lastSendTime =
         now;
@@ -256,7 +234,6 @@ function sendXYToServer(
             )
         );
 
-
     const safeY =
         Math.max(
             0,
@@ -268,30 +245,46 @@ function sendXYToServer(
 
 
     // --------------------------------
-    // สร้างข้อมูล
+    // ส่ง HTTP POST
     // --------------------------------
 
-    const message = {
+    fetch(
+        HTTP_URL,
+        {
 
-        x: safeX,
+            method: "POST",
 
-        y: safeY
+            headers: {
+                "Content-Type":
+                    "application/json"
+            },
 
-    };
+            body: JSON.stringify({
 
+                x: safeX,
+                y: safeY
 
-    // --------------------------------
-    // ส่ง
-    // --------------------------------
+            })
 
-    try {
+        }
+    )
 
-        socket.send(
-            JSON.stringify(
-                message
-            )
-        );
+    .then(response => {
 
+        if (!response.ok) {
+
+            throw new Error(
+                "HTTP " +
+                response.status
+            );
+
+        }
+
+        return response.json();
+
+    })
+
+    .then(data => {
 
         console.log(
             "📡 SEND X:",
@@ -300,25 +293,20 @@ function sendXYToServer(
             safeY.toFixed(3)
         );
 
-    }
+    })
 
-    catch (error) {
+    .catch(error => {
 
         console.error(
             "❌ ส่ง X/Y ไม่สำเร็จ:",
             error
         );
 
-    }
+    });
 
 }
 
 
-// ========================================
-// เริ่ม WebSocket
-// ========================================
-
-connectOSCBridge();
 
 
 // ========================================
