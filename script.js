@@ -1243,6 +1243,9 @@ function detectTV() {
                     maxY -
                     minY;
 
+                const centerY =
+                    (minY + maxY) / 2;
+
 
                 // =================================
                 // ขนาดขั้นต่ำ
@@ -1265,21 +1268,14 @@ function detectTV() {
                     // ของจอแนวนอน
 
                     if (
-
                         ratio > 1.2 &&
-
-                        ratio < 2.4
-
+                        ratio < 2.4 &&
+                        centerY < height * 0.62
                     ) {
-
                         candidates.push({
-
                             area: area,
-
                             points: points
-
                         });
-
                     }
 
                 }
