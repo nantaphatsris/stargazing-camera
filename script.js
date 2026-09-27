@@ -1266,9 +1266,9 @@ function detectTV() {
 
                     if (
 
-                        ratio > 1.05 &&
+                        ratio > 1.2 &&
 
-                        ratio < 4.5
+                        ratio < 2.4
 
                     ) {
 
