@@ -1075,7 +1075,7 @@ function detectTV() {
             // ขนาดเล็กเกินไป
 
             if (
-                area < 5000
+                area < 2500
             ) {
 
                 contour.delete();
@@ -1095,9 +1095,9 @@ function detectTV() {
 
             if (
 
-                areaRatio < 0.05 ||
+                areaRatio < 0.02 ||
 
-                areaRatio > 0.90
+                areaRatio > 0.97
 
             ) {
 
@@ -1250,9 +1250,9 @@ function detectTV() {
 
                 if (
 
-                    boxWidth > 100 &&
+                    boxWidth > 80 &&
 
-                    boxHeight > 80
+                    boxHeight > 50
 
                 ) {
 
@@ -1266,9 +1266,9 @@ function detectTV() {
 
                     if (
 
-                        ratio > 1.1 &&
+                        ratio > 1.05 &&
 
-                        ratio < 3.5
+                        ratio < 4.5
 
                     ) {
 
