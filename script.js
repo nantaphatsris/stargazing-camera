@@ -1,82 +1,7 @@
-vs code
-
-
-
-
-[ index.html ]
-
-
-
-<!DOCTYPE html>
-
-<html>
-
-<head>
-
-    <meta charset="UTF-8">
-
-    <meta name="viewport"
-          content="width=device-width, initial-scale=1.0">
-
-    <title>Stargazing Camera</title>
-
-    <link rel="stylesheet" href="style.css">
-
-</head>
-
-
-<body>
-
-    <!-- กล้องมือถือ -->
-    <video id="camera" autoplay playsinline></video>
-
-    <canvas id="processingCanvas"></canvas>
-
-    <canvas id="overlayCanvas"></canvas>
-
-    <!-- จุดเล็งตรงกลาง -->
-    <div id="crosshair"></div>
-
-    <div id="coordinates">
-
-    X: <span id="x">0.00</span>
- 
-    <br>
-
-    Y: <span id="y">0.00</span>
-
-</div>
-
-
-<div id="status">
-    กำลังรอ OpenCV...
-</div>
-
-
-
-    <!-- ปุ่มเปิดกล้อง -->
-    <button id="startButton">
-        เปิดกล้อง
-    </button>
-
-
-    <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
-    <script src="script.js"></script>
-
-</body>
-
-</html>
-
-
-
-
-
-[ script.js ]
-
-
 // ========================================
 // STARGAZING
 // Camera + OpenCV + TV Detection + X/Y
+// + WebSocket → Node.js → OSC
 // ========================================
 
 
@@ -123,6 +48,270 @@ const maxLostFrames = 8;
 
 
 // ========================================
+// WEBSOCKET → NODE.JS
+// ========================================
+
+let socket = null;
+
+let websocketConnected = false;
+
+
+// ========================================
+// CLOUDFLARE WEBSOCKET URL
+// ========================================
+
+const WEBSOCKET_URL = "wss://recovery-nose-evanescence-wolf.trycloudflare.com";
+const HTTP_URL = "https://hourly-contrast-expense-guitars.trycloudflare.com/xy";
+
+
+
+
+// ========================================
+// จำกัดความถี่การส่ง X/Y
+// ========================================
+
+let lastSendTime = 0;
+
+const SEND_INTERVAL = 50;
+
+
+// ========================================
+// เชื่อมต่อ WebSocket
+// ========================================
+
+function connectOSCBridge() {
+
+    console.log(
+        "================================"
+    );
+
+    console.log(
+        "กำลังเชื่อมต่อ WebSocket..."
+    );
+
+    console.log(
+        WEBSOCKET_URL
+    );
+
+    console.log(
+        "================================"
+    );
+
+
+    try {
+
+        socket =
+            new WebSocket(
+                WEBSOCKET_URL
+            );
+
+
+        // --------------------------------
+        // เชื่อมต่อสำเร็จ
+        // --------------------------------
+
+        socket.onopen =
+            function () {
+
+                websocketConnected =
+                    true;
+
+                console.log(
+                    "✅ WebSocket Connected!"
+                );
+
+                console.log(
+                    "พร้อมส่ง X/Y ไป Node.js"
+                );
+
+            };
+
+
+        // --------------------------------
+        // มี Error
+        // --------------------------------
+
+        socket.onerror =
+            function (error) {
+
+                websocketConnected =
+                    false;
+
+                console.error(
+                    "❌ WebSocket Error:",
+                    error
+                );
+
+            };
+
+
+        // --------------------------------
+        // หลุดการเชื่อมต่อ
+        // --------------------------------
+
+        socket.onclose =
+            function (event) {
+
+                websocketConnected =
+                    false;
+
+                console.log(
+                    "⚠️ WebSocket Closed",
+                    event.code,
+                    event.reason
+                );
+
+
+                // พยายามเชื่อมต่อใหม่
+                setTimeout(
+                    connectOSCBridge,
+                    2000
+                );
+
+            };
+
+    }
+
+    catch (error) {
+
+        websocketConnected =
+            false;
+
+        console.error(
+            "❌ WebSocket Setup Error:",
+            error
+        );
+
+
+        setTimeout(
+            connectOSCBridge,
+            2000
+        );
+
+    }
+
+}
+
+
+// ========================================
+// ส่ง X/Y ไป Node.js
+// ========================================
+
+function sendXYToServer(
+    x,
+    y
+) {
+
+    // --------------------------------
+    // จำกัดความถี่
+    // 50 ms = 20 ครั้ง / วินาที
+    // --------------------------------
+
+    const now =
+        performance.now();
+
+    if (
+        now - lastSendTime <
+        SEND_INTERVAL
+    ) {
+
+        return;
+
+    }
+
+    lastSendTime =
+        now;
+
+
+    // --------------------------------
+    // จำกัด X/Y ให้อยู่ 0 - 1
+    // --------------------------------
+
+    const safeX =
+        Math.max(
+            0,
+            Math.min(
+                1,
+                Number(x)
+            )
+        );
+
+    const safeY =
+        Math.max(
+            0,
+            Math.min(
+                1,
+                Number(y)
+            )
+        );
+
+
+    // --------------------------------
+    // ส่ง HTTP POST
+    // --------------------------------
+
+    fetch(
+        HTTP_URL,
+        {
+
+            method: "POST",
+
+            headers: {
+                "Content-Type":
+                    "application/json"
+            },
+
+            body: JSON.stringify({
+
+                x: safeX,
+                y: safeY
+
+            })
+
+        }
+    )
+
+    .then(response => {
+
+        if (!response.ok) {
+
+            throw new Error(
+                "HTTP " +
+                response.status
+            );
+
+        }
+
+        return response.json();
+
+    })
+
+    .then(data => {
+
+        console.log(
+            "📡 SEND X:",
+            safeX.toFixed(3),
+            "Y:",
+            safeY.toFixed(3)
+        );
+
+    })
+
+    .catch(error => {
+
+        console.error(
+            "❌ ส่ง X/Y ไม่สำเร็จ:",
+            error
+        );
+
+    });
+
+}
+
+
+
+
+// ========================================
 // RESIZE OVERLAY
 // ========================================
 
@@ -136,10 +325,12 @@ function resizeOverlay() {
 
 }
 
+
 window.addEventListener(
     "resize",
     resizeOverlay
 );
+
 
 resizeOverlay();
 
@@ -218,8 +409,12 @@ startButton.addEventListener(
 function waitForOpenCV() {
 
     if (
-        typeof cv !== "undefined" &&
+
+        typeof cv !==
+            "undefined" &&
+
         cv.Mat
+
     ) {
 
         return true;
@@ -237,7 +432,9 @@ function waitForOpenCV() {
 
 function startDetection() {
 
-    if (!waitForOpenCV()) {
+    if (
+        !waitForOpenCV()
+    ) {
 
         statusText.textContent =
             "กำลังรอ OpenCV...";
@@ -247,6 +444,7 @@ function startDetection() {
             startDetection,
             500
         );
+
 
         return;
 
@@ -280,55 +478,73 @@ function orderPoints(points) {
     let sums =
         points.map(
             point =>
-                point.x + point.y
+                point.x +
+                point.y
         );
 
 
     let differences =
         points.map(
             point =>
-                point.x - point.y
+                point.x -
+                point.y
         );
 
 
     let topLeftIndex =
         sums.indexOf(
-            Math.min(...sums)
+            Math.min(
+                ...sums
+            )
         );
 
 
     let bottomRightIndex =
         sums.indexOf(
-            Math.max(...sums)
+            Math.max(
+                ...sums
+            )
         );
 
 
     let topRightIndex =
         differences.indexOf(
-            Math.max(...differences)
+            Math.max(
+                ...differences
+            )
         );
 
 
     let bottomLeftIndex =
         differences.indexOf(
-            Math.min(...differences)
+            Math.min(
+                ...differences
+            )
         );
 
 
     ordered[0] =
-        points[topLeftIndex];
+        points[
+            topLeftIndex
+        ];
 
 
     ordered[1] =
-        points[topRightIndex];
+        points[
+            topRightIndex
+        ];
 
 
     ordered[2] =
-        points[bottomRightIndex];
+        points[
+            bottomRightIndex
+        ];
 
 
     ordered[3] =
-        points[bottomLeftIndex];
+        points[
+            bottomLeftIndex
+        ];
 
 
     return ordered;
@@ -353,6 +569,7 @@ function cameraToScreen(
     const screenWidth =
         window.innerWidth;
 
+
     const screenHeight =
         window.innerHeight;
 
@@ -370,11 +587,13 @@ function cameraToScreen(
 
 
     const displayedWidth =
-        imageWidth * scale;
+        imageWidth *
+        scale;
 
 
     const displayedHeight =
-        imageHeight * scale;
+        imageHeight *
+        scale;
 
 
     const offsetX =
@@ -501,10 +720,6 @@ function calculateXY(
 
         // --------------------------------
         // จุดกลางกล้อง
-        //
-        // สำคัญ:
-        // ใช้พิกัดของภาพ OpenCV
-        // ไม่ใช่ screen coordinates
         // --------------------------------
 
         let centerX =
@@ -570,14 +785,20 @@ function calculateXY(
         x =
             Math.max(
                 0,
-                Math.min(1, x)
+                Math.min(
+                    1,
+                    x
+                )
             );
 
 
         y =
             Math.max(
                 0,
-                Math.min(1, y)
+                Math.min(
+                    1,
+                    y
+                )
             );
 
 
@@ -591,6 +812,16 @@ function calculateXY(
 
         yText.textContent =
             y.toFixed(2);
+
+
+        // ========================================
+        // ส่ง X/Y ไป Node.js
+        // ========================================
+
+        sendXYToServer(
+            x,
+            y
+        );
 
 
         // --------------------------------
@@ -640,8 +871,11 @@ function detectTV() {
 
 
     if (
+
         camera.videoWidth === 0 ||
+
         camera.videoHeight === 0
+
     ) {
 
         requestAnimationFrame(
@@ -657,7 +891,8 @@ function detectTV() {
     // ขนาดภาพสำหรับ OpenCV
     // ====================================
 
-    const width = 640;
+    const width =
+        640;
 
 
     const height =
@@ -675,6 +910,7 @@ function detectTV() {
     canvas.width =
         width;
 
+
     canvas.height =
         height;
 
@@ -684,7 +920,9 @@ function detectTV() {
     // ====================================
 
     const context =
-        canvas.getContext("2d");
+        canvas.getContext(
+            "2d"
+        );
 
 
     context.drawImage(
@@ -707,7 +945,9 @@ function detectTV() {
         // =================================
 
         let src =
-            cv.imread(canvas);
+            cv.imread(
+                canvas
+            );
 
 
         // =================================
@@ -743,7 +983,10 @@ function detectTV() {
 
             blurred,
 
-            new cv.Size(5, 5),
+            new cv.Size(
+                5,
+                5
+            ),
 
             0
 
@@ -765,7 +1008,6 @@ function detectTV() {
             edges,
 
             50,
-
             150
 
         );
@@ -806,14 +1048,16 @@ function detectTV() {
 
 
         const imageArea =
-            width * height;
+            width *
+            height;
 
 
         for (
 
             let i = 0;
 
-            i < contours.size();
+            i <
+            contours.size();
 
             i++
 
@@ -830,7 +1074,10 @@ function detectTV() {
 
 
             // ขนาดเล็กเกินไป
-            if (area < 5000) {
+
+            if (
+                area < 2500
+            ) {
 
                 contour.delete();
 
@@ -848,8 +1095,11 @@ function detectTV() {
             // และไม่เอาเต็มภาพ
 
             if (
-                areaRatio < 0.05 ||
-                areaRatio > 0.90
+
+                areaRatio < 0.02 ||
+
+                areaRatio > 0.97
+
             ) {
 
                 contour.delete();
@@ -947,42 +1197,52 @@ function detectTV() {
 
                 let minX =
                     Math.min(
+
                         ...points.map(
                             p => p.x
                         )
+
                     );
 
 
                 let maxX =
                     Math.max(
+
                         ...points.map(
                             p => p.x
                         )
+
                     );
 
 
                 let minY =
                     Math.min(
+
                         ...points.map(
                             p => p.y
                         )
+
                     );
 
 
                 let maxY =
                     Math.max(
+
                         ...points.map(
                             p => p.y
                         )
+
                     );
 
 
                 const boxWidth =
-                    maxX - minX;
+                    maxX -
+                    minX;
 
 
                 const boxHeight =
-                    maxY - minY;
+                    maxY -
+                    minY;
 
 
                 // =================================
@@ -990,8 +1250,11 @@ function detectTV() {
                 // =================================
 
                 if (
-                    boxWidth > 100 &&
-                    boxHeight > 80
+
+                    boxWidth > 80 &&
+
+                    boxHeight > 50
+
                 ) {
 
                     const ratio =
@@ -1003,8 +1266,11 @@ function detectTV() {
                     // ของจอแนวนอน
 
                     if (
-                        ratio > 1.1 &&
-                        ratio < 3.5
+
+                        ratio > 1.05 &&
+
+                        ratio < 4.5
+
                     ) {
 
                         candidates.push({
@@ -1044,7 +1310,8 @@ function detectTV() {
             candidates.sort(
 
                 (a, b) =>
-                    b.area - a.area
+                    b.area -
+                    a.area
 
             );
 
@@ -1109,8 +1376,10 @@ function detectTV() {
 
 
             if (
+
                 lostFrames >
                 maxLostFrames
+
             ) {
 
                 clearOverlay();
@@ -1239,18 +1508,26 @@ function drawDetectedTV(
             lastTVPoints[i].x +=
 
                 (
+
                     screenPoints[i].x -
+
                     lastTVPoints[i].x
+
                 ) *
+
                 smooth;
 
 
             lastTVPoints[i].y +=
 
                 (
+
                     screenPoints[i].y -
+
                     lastTVPoints[i].y
+
                 ) *
+
                 smooth;
 
         }
@@ -1442,171 +1719,5 @@ function clearOverlay() {
         overlayCanvas.height
 
     );
-
-}
-
-
-
-[ style.css ]
-
-
-
-* {
-    box-sizing: border-box;
-}
-
-html, body {
-    margin: 0;
-    width: 100%;
-    height: 100%;
-}
-
-body {
-    background: black;
-    overflow: hidden;
-}
-
-
-/* กล้อง */
-#camera {
-    width: 100vw;
-    height: 100vh;
-
-    object-fit: cover;
-
-    display: block;
-}
-
-
-#crosshair {
-
-    position: fixed;
-
-    left: 50%;
-    top: 50%;
-
-    width: 50px;
-    height: 50px;
-
-    transform: translate(-50%, -50%);
-
-    border: 2px solid white;
-
-    border-radius: 50%;
-
-    pointer-events: none;
-
-}
-
-
-/* จุดตรงกลางของ crosshair */
-
-#crosshair::after {
-
-    content: "";
-
-    position: absolute;
-
-    left: 50%;
-    top: 50%;
-
-    width: 6px;
-    height: 6px;
-
-    transform: translate(-50%, -50%);
-
-    background: white;
-
-    border-radius: 50%;
-
-}
-
-
-/* ปุ่ม */
-#startButton {
-
-    position: fixed;
-
-    left: 50%;
-    bottom: 40px;
-
-    transform: translateX(-50%);
-
-    padding: 15px 25px;
-
-    font-size: 18px;
-
-    border: none;
-
-    border-radius: 10px;
-
-    background: white;
-
-    color: black;
-
-    cursor: pointer;
-
-}
-#overlayCanvas {
-    position: fixed;
-    left: 0;
-    top: 0;
-    width: 100vw;
-    height: 100vh;
-    pointer-events: none;
-    z-index: 5;
-
-
-}
-
-
-#coordinates {
-
-    position: fixed;
-
-    top: 20px;
-    left: 20px;
-
-    padding: 10px 15px;
-
-    background: rgba(0, 0, 0, 0.7);
-
-    color: white;
-
-    font-family: monospace;
-
-    font-size: 18px;
-
-    border-radius: 8px;
-
-    z-index: 10;
-
-}
-
-#processingCanvas {
-    display: none;
-}
-
-
-#status {
-
-    position: fixed;
-
-    top: 90px;
-    left: 20px;
-
-    padding: 10px 15px;
-
-    background: rgba(0, 0, 0, 0.7);
-
-    color: white;
-
-    font-family: Arial, sans-serif;
-
-    font-size: 16px;
-
-    border-radius: 8px;
-
-    z-index: 20;
 
 }
