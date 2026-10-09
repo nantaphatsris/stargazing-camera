@@ -60,8 +60,8 @@ let websocketConnected = false;
 // CLOUDFLARE WEBSOCKET URL
 // ========================================
 
-const WEBSOCKET_URL = "wss://recovery-nose-evanescence-wolf.trycloudflare.com";
-const HTTP_URL = "https://hourly-contrast-expense-guitars.trycloudflare.com/xy";
+const WEBSOCKET_URL = "wss://resistance-chicago-retained-professor.trycloudflare.com";
+const HTTP_URL = " https://resistance-chicago-retained-professor.trycloudflare.com/xy";
 
 
 
