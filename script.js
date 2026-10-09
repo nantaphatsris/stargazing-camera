@@ -1,1135 +1,746 @@
 
 "use strict";
 
-/* =========================================
-   STAR GAZING — Camera + Rectangle Detection
-   Manual 4-corner selection + X/Y 0–1
-   No WebSocket, HTTP, OSC, or TouchDesigner
-========================================= */
+// ================================================
+// STARGAZING - NEW DETECTION SYSTEM
+// Camera + OpenCV + TV Detection + Perspective X/Y
+// No WebSocket / HTTP / OSC / TouchDesigner
+// ================================================
 
-// ---------- CONFIG ----------
-const PROCESS_WIDTH = 640;
-const DETECTION_INTERVAL = 120;
-const MAX_LOST_FRAMES = 8;
-const MIN_RECT_AREA = 0.025;
-const MAX_RECT_AREA = 0.95;
 
-// ---------- ELEMENTS ----------
+// 1. HTML ELEMENTS
+// ================================================
+
 const camera = document.getElementById("camera");
 const startButton = document.getElementById("startButton");
-const xElement = document.getElementById("x");
-const yElement = document.getElementById("y");
-const processingCanvas = document.getElementById("processingCanvas");
+const xText = document.getElementById("x");
+const yText = document.getElementById("y");
+const canvas = document.getElementById("processingCanvas");
 const overlayCanvas = document.getElementById("overlayCanvas");
-const statusElement = document.getElementById("status");
+const statusText = document.getElementById("status");
+
+const overlayContext = overlayCanvas.getContext("2d");
+const processingContext = canvas.getContext("2d", {
+    willReadFrequently: true
+});
+
+
+// 2. CONFIGURATION
+// ================================================
+
+const PROCESS_WIDTH = 640;
+
+// ขนาดพื้นที่ที่อนุญาตให้ตรวจจับ
+const MIN_AREA_RATIO = 0.04;
+const MAX_AREA_RATIO = 0.90;
+
+// จอ TV ส่วนใหญ่อยู่ในแนวนอน
+const MIN_ASPECT_RATIO = 1.15;
+const MAX_ASPECT_RATIO = 2.80;
+
+// ลดการตรวจจับสี่เหลี่ยมขนาดเล็ก
+const MIN_BOX_WIDTH = 100;
+const MIN_BOX_HEIGHT = 65;
+
+// ความถี่การตรวจจับ
+const DETECTION_INTERVAL = 60;
+
+// ความนุ่มนวลของกรอบ
+const SMOOTHING = 0.30;
+
+// จำนวนเฟรมที่ยอมให้ไม่พบจอก่อนล้างกรอบ
+const MAX_LOST_FRAMES = 5;
+
+
+// 3. STATE
+// ================================================
+
+let cameraStream = null;
+let cameraStarted = false;
+let detectionRunning = false;
+let detectionTimer = null;
+let openCVReady = false;
+
+let lastTVPoints = null;
+let lostFrames = 0;
+let lastDetectionTime = 0;
+
+
+// 4. VALIDATE HTML
+// ================================================
 
 if (
-  !camera ||
-  !startButton ||
-  !xElement ||
-  !yElement ||
-  !processingCanvas ||
-  !overlayCanvas ||
-  !statusElement
+    !camera ||
+    !startButton ||
+    !xText ||
+    !yText ||
+    !canvas ||
+    !overlayCanvas ||
+    !statusText
 ) {
-  console.error(
-    "Missing HTML element. Check camera, startButton, x, y, processingCanvas, overlayCanvas, and status."
-  );
+    throw new Error(
+        "ไม่พบ HTML element ที่จำเป็น กรุณาตรวจสอบ IDs ในไฟล์ HTML"
+    );
 }
 
-const processingContext = processingCanvas?.getContext("2d", {
-  willReadFrequently: true
-});
 
-const overlayContext = overlayCanvas?.getContext("2d");
+// 5. RESIZE OVERLAY
+// ================================================
 
-// ---------- STATE ----------
-let stream = null;
-let running = false;
-let cvReady = false;
-let loopTimer = null;
+function resizeOverlay() {
+    const dpr = window.devicePixelRatio || 1;
 
-let manualMode = false;
-let selectedPoints = [];
-let lastRectangle = null;
-let lostFrames = 0;
+    overlayCanvas.width = Math.round(window.innerWidth * dpr);
+    overlayCanvas.height = Math.round(window.innerHeight * dpr);
 
-let manualButton;
-let autoButton;
-let resetButton;
-let controlsPanel;
-let instructionsElement;
+    overlayCanvas.style.width = window.innerWidth + "px";
+    overlayCanvas.style.height = window.innerHeight + "px";
 
-// ---------- STATUS ----------
-function setStatus(message) {
-  if (statusElement) {
-    statusElement.textContent = message;
-  }
+    overlayContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    drawCurrentOverlay();
 }
 
-function setXY(x, y) {
-  if (xElement) {
-    xElement.textContent =
-      x == null ? "--" : Number(x).toFixed(3);
-  }
+window.addEventListener("resize", resizeOverlay);
+resizeOverlay();
 
-  if (yElement) {
-    yElement.textContent =
-      y == null ? "--" : Number(y).toFixed(3);
-  }
-}
 
-function resetXY() {
-  setXY(null, null);
-}
+// 6. WAIT FOR OPENCV
+// ================================================
 
-// ---------- UI ----------
-function addPageStyles() {
-  const style = document.createElement("style");
-  style.id = "stargazing-ui-styles";
+function waitForOpenCV() {
+    return new Promise((resolve, reject) => {
+        const startTime = Date.now();
+        const timeout = 30000;
 
-  style.textContent = `
-    #sg-controls {
-      position: fixed;
-      top: max(12px, env(safe-area-inset-top));
-      left: 10px;
-      right: 10px;
-      z-index: 2147483000;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: flex-start;
-      pointer-events: none;
-      font-family: Arial, sans-serif;
-    }
+        function check() {
+            if (
+                typeof cv !== "undefined" &&
+                cv.Mat &&
+                cv.findContours &&
+                cv.getPerspectiveTransform
+            ) {
+                openCVReady = true;
+                resolve();
+                return;
+            }
 
-    #sg-controls button {
-      pointer-events: auto;
-      appearance: none;
-      -webkit-appearance: none;
-      touch-action: manipulation;
-      cursor: pointer;
-      color: white;
-      background: #176b39;
-      border: 1px solid rgba(255,255,255,.35);
-      border-radius: 12px;
-      padding: 11px 13px;
-      min-height: 44px;
-      font-size: 14px;
-      font-weight: 600;
-      box-shadow: 0 2px 8px rgba(0,0,0,.3);
-    }
+            if (Date.now() - startTime > timeout) {
+                reject(
+                    new Error(
+                        "โหลด OpenCV ไม่สำเร็จภายใน 30 วินาที"
+                    )
+                );
+                return;
+            }
 
-    #sg-controls button.sg-secondary {
-      background: #333333;
-    }
-
-    #sg-controls button.sg-danger {
-      background: #8c2831;
-    }
-
-    #sg-instructions {
-      flex-basis: 100%;
-      width: fit-content;
-      max-width: 100%;
-      box-sizing: border-box;
-      padding: 9px 12px;
-      border-radius: 10px;
-      color: white;
-      background: rgba(0,0,0,.75);
-      font-size: 14px;
-      line-height: 1.45;
-      pointer-events: none;
-    }
-
-    #overlayCanvas {
-      position: fixed !important;
-      inset: 0 !important;
-      width: 100vw !important;
-      height: 100vh !important;
-      z-index: 1000 !important;
-      pointer-events: none;
-      touch-action: manipulation;
-    }
-
-    #sg-controls button:active {
-      opacity: .75;
-      transform: scale(.98);
-    }
-  `;
-
-  document.head.appendChild(style);
-}
-
-function createControls() {
-  addPageStyles();
-
-  // Prevent creating duplicate controls.
-  document.getElementById("sg-controls")?.remove();
-
-  controlsPanel = document.createElement("div");
-  controlsPanel.id = "sg-controls";
-
-  manualButton = createButton(
-    "เลือก 4 มุมเอง",
-    "sg-primary",
-    () => enableManualMode()
-  );
-
-  autoButton = createButton(
-    "กลับไปตรวจจับอัตโนมัติ",
-    "sg-secondary",
-    () => enableAutoMode()
-  );
-
-  resetButton = createButton(
-    "ล้างมุมที่เลือก",
-    "sg-danger",
-    () => resetManualPoints()
-  );
-
-  instructionsElement = document.createElement("div");
-  instructionsElement.id = "sg-instructions";
-  instructionsElement.textContent =
-    "เปิดกล้อง แล้วเลือก 4 มุมเองได้เมื่อระบบหาไม่พบ";
-
-  controlsPanel.append(
-    manualButton,
-    autoButton,
-    resetButton,
-    instructionsElement
-  );
-
-  document.body.appendChild(controlsPanel);
-}
-
-function createButton(label, className, callback) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = label;
-  button.className = className;
-
-  if (className === "sg-secondary") {
-    button.classList.add("sg-secondary");
-  }
-
-  if (className === "sg-danger") {
-    button.classList.add("sg-danger");
-  }
-
-  button.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    callback();
-  });
-
-  return button;
-}
-
-function setInstructions(message) {
-  if (instructionsElement) {
-    instructionsElement.textContent = message;
-  }
-}
-
-// ---------- OPENCV READY ----------
-function waitForOpenCV(timeoutMs = 20000) {
-  return new Promise((resolve, reject) => {
-    const startTime = Date.now();
-
-    function check() {
-      if (
-        typeof cv !== "undefined" &&
-        cv &&
-        cv.Mat &&
-        cv.findContours &&
-        cv.getPerspectiveTransform
-      ) {
-        // OpenCV.js runtime is ready after this callback.
-        if (cv.HEAP8 && cv.HEAP8.length > 0) {
-          cvReady = true;
-          resolve();
-          return;
+            setTimeout(check, 200);
         }
-      }
 
-      if (Date.now() - startTime > timeoutMs) {
-        reject(
-          new Error(
-            "OpenCV ยังไม่พร้อม กรุณาตรวจสอบว่า HTML โหลด OpenCV.js แล้ว"
-          )
-        );
-        return;
-      }
-
-      setTimeout(check, 150);
-    }
-
-    check();
-  });
+        check();
+    });
 }
 
-// ---------- CAMERA ----------
+
+// 7. START CAMERA
+// ================================================
+
+startButton.addEventListener("click", startCamera);
+
 async function startCamera() {
-  try {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error(
-        "เบราว์เซอร์นี้ไม่รองรับกล้อง กรุณาเปิดเว็บผ่าน HTTPS"
-      );
+    if (cameraStarted) return;
+
+    startButton.disabled = true;
+    statusText.textContent = "กำลังเปิดกล้อง...";
+
+    try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+            throw new Error(
+                "เบราว์เซอร์นี้ไม่รองรับกล้อง หรือเว็บไม่ได้ใช้ HTTPS"
+            );
+        }
+
+        cameraStream =
+            await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: {
+                        ideal: "environment"
+                    },
+                    width: {
+                        ideal: 1280
+                    },
+                    height: {
+                        ideal: 720
+                    }
+                },
+                audio: false
+            });
+
+        camera.srcObject = cameraStream;
+
+        await new Promise((resolve, reject) => {
+            if (
+                camera.readyState >=
+                HTMLMediaElement.HAVE_METADATA
+            ) {
+                resolve();
+                return;
+            }
+
+            camera.onloadedmetadata = resolve;
+
+            camera.onerror = () => {
+                reject(new Error("ไม่สามารถอ่านภาพจากกล้องได้"));
+            };
+        });
+
+        await camera.play();
+
+        cameraStarted = true;
+        startButton.style.display = "none";
+
+        statusText.textContent = "กำลังโหลด OpenCV...";
+
+        await waitForOpenCV();
+
+        statusText.textContent = "OpenCV พร้อมแล้ว กำลังค้นหาจอ TV...";
+
+        startDetection();
+
+    } catch (error) {
+        console.error("Camera startup error:", error);
+
+        statusText.textContent =
+            "เปิดกล้องไม่สำเร็จ: " + error.message;
+
+        startButton.disabled = false;
     }
+}
 
-    setStatus("กำลังเปิดกล้อง...");
-    setInstructions("กำลังขออนุญาตใช้กล้อง");
 
-    if (!cvReady) {
-      setStatus("กำลังโหลดระบบตรวจจับ...");
-      await waitForOpenCV();
+// 8. ORDER THE FOUR CORNERS
+// ================================================
+// Output: TL -> TR -> BR -> BL
+
+function orderPoints(points) {
+    const sums = points.map(p => p.x + p.y);
+    const diffs = points.map(p => p.x - p.y);
+
+    return [
+        points[sums.indexOf(Math.min(...sums))],
+        points[diffs.indexOf(Math.max(...diffs))],
+        points[sums.indexOf(Math.max(...sums))],
+        points[diffs.indexOf(Math.min(...diffs))]
+    ];
+}
+
+
+// 9. DETECT TV CANDIDATES
+// ================================================
+
+function findTVCandidates(src) {
+    const gray = new cv.Mat();
+    const blurred = new cv.Mat();
+    const edges = new cv.Mat();
+    const closed = new cv.Mat();
+
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+
+    const kernel = cv.Mat.ones(5, 5, cv.CV_8U);
+
+    const candidates = [];
+
+    const width = src.cols;
+    const height = src.rows;
+    const imageArea = width * height;
+
+    try {
+        // Convert to grayscale
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+        // Reduce noise
+        cv.GaussianBlur(
+            gray,
+            blurred,
+            new cv.Size(5, 5),
+            0
+        );
+
+        // Find edges
+        cv.Canny(blurred, edges, 50, 150);
+
+        // Connect nearby broken edges
+        cv.morphologyEx(
+            edges,
+            closed,
+            cv.MORPH_CLOSE,
+            kernel
+        );
+
+        // Find outer contours
+        cv.findContours(
+            closed,
+            contours,
+            hierarchy,
+            cv.RETR_EXTERNAL,
+            cv.CHAIN_APPROX_SIMPLE
+        );
+
+        for (let i = 0; i < contours.size(); i++) {
+            const contour = contours.get(i);
+            let approx = null;
+
+            try {
+                const area = cv.contourArea(contour);
+                const areaRatio = area / imageArea;
+
+                // Reject objects that are too small or too large
+                if (
+                    areaRatio < MIN_AREA_RATIO ||
+                    areaRatio > MAX_AREA_RATIO
+                ) {
+                    continue;
+                }
+
+                const perimeter = cv.arcLength(contour, true);
+
+                approx = new cv.Mat();
+
+                cv.approxPolyDP(
+                    contour,
+                    approx,
+                    0.02 * perimeter,
+                    true
+                );
+
+                // Must be a four-corner polygon
+                if (approx.rows !== 4) continue;
+
+                if (!cv.isContourConvex(approx)) continue;
+
+                const points = [];
+
+                for (let j = 0; j < 4; j++) {
+                    const point = approx.intPtr(j, 0);
+
+                    points.push({
+                        x: point[0],
+                        y: point[1]
+                    });
+                }
+
+                const ordered = orderPoints(points);
+
+                const minX = Math.min(...ordered.map(p => p.x));
+                const maxX = Math.max(...ordered.map(p => p.x));
+                const minY = Math.min(...ordered.map(p => p.y));
+                const maxY = Math.max(...ordered.map(p => p.y));
+
+                const boxWidth = maxX - minX;
+                const boxHeight = maxY - minY;
+
+                if (
+                    boxWidth < MIN_BOX_WIDTH ||
+                    boxHeight < MIN_BOX_HEIGHT
+                ) {
+                    continue;
+                }
+
+                const ratio = boxWidth / boxHeight;
+
+                if (
+                    ratio < MIN_ASPECT_RATIO ||
+                    ratio > MAX_ASPECT_RATIO
+                ) {
+                    continue;
+                }
+
+                // Reject shapes that fill too little of their bounding box
+                const boxArea = boxWidth * boxHeight;
+                const rectangularity = area / boxArea;
+
+                if (rectangularity < 0.55) continue;
+
+                // Score: prefer a large, rectangular, 16:9-like object
+                const ratioScore = Math.exp(
+                    -Math.abs(Math.log(ratio / (16 / 9)))
+                );
+
+                const sizeScore = Math.sqrt(areaRatio);
+
+                const score =
+                    ratioScore * 0.6 +
+                    rectangularity * 0.25 +
+                    sizeScore * 0.15;
+
+                candidates.push({
+                    area,
+                    score,
+                    points: ordered
+                });
+
+            } finally {
+                if (approx) approx.delete();
+                contour.delete();
+            }
+        }
+
+        candidates.sort((a, b) => b.score - a.score);
+
+        return candidates;
+
+    } finally {
+        gray.delete();
+        blurred.delete();
+        edges.delete();
+        closed.delete();
+        contours.delete();
+        hierarchy.delete();
+        kernel.delete();
     }
+}
 
-    stopCamera(false);
 
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        facingMode: { ideal: "environment" },
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
-      }
-    });
+// 10. PERSPECTIVE TRANSFORM -> X/Y
+// ================================================
 
-    camera.srcObject = stream;
-    camera.setAttribute("playsinline", "");
-    camera.setAttribute("autoplay", "");
-    camera.muted = true;
+function calculateXY(points, width, height) {
+    let source = null;
+    let destination = null;
+    let transform = null;
+    let centerPoint = null;
+    let result = null;
 
-    await new Promise((resolve, reject) => {
-      if (camera.readyState >= 2 && camera.videoWidth > 0) {
-        resolve();
-        return;
-      }
+    try {
+        source = cv.matFromArray(
+            4,
+            1,
+            cv.CV_32FC2,
+            [
+                points[0].x, points[0].y,
+                points[1].x, points[1].y,
+                points[2].x, points[2].y,
+                points[3].x, points[3].y
+            ]
+        );
 
-      camera.onloadedmetadata = () => resolve();
-      camera.onerror = () => reject(
-        new Error("โหลดภาพจากกล้องไม่สำเร็จ")
-      );
-    });
+        destination = cv.matFromArray(
+            4,
+            1,
+            cv.CV_32FC2,
+            [
+                0, 0,
+                1, 0,
+                1, 1,
+                0, 1
+            ]
+        );
 
-    await camera.play();
+        transform = cv.getPerspectiveTransform(
+            source,
+            destination
+        );
 
-    if (!camera.videoWidth || !camera.videoHeight) {
-      throw new Error("ยังไม่ได้รับภาพจากกล้อง");
+        centerPoint = cv.matFromArray(
+            1,
+            1,
+            cv.CV_32FC2,
+            [
+                width / 2,
+                height / 2
+            ]
+        );
+
+        result = new cv.Mat();
+
+        cv.perspectiveTransform(
+            centerPoint,
+            result,
+            transform
+        );
+
+        const x = result.data32F[0];
+        const y = result.data32F[1];
+
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            throw new Error("พิกัดที่คำนวณได้ไม่ถูกต้อง");
+        }
+
+        return {
+            x: Math.max(0, Math.min(1, x)),
+            y: Math.max(0, Math.min(1, y))
+        };
+
+    } finally {
+        if (source) source.delete();
+        if (destination) destination.delete();
+        if (transform) transform.delete();
+        if (centerPoint) centerPoint.delete();
+        if (result) result.delete();
     }
+}
 
-    prepareCanvases();
 
-    running = true;
-    manualMode = false;
-    selectedPoints = [];
-    lastRectangle = null;
-    lostFrames = 0;
+// 11. CAMERA COORDINATES -> OVERLAY COORDINATES
+// ================================================
 
-    resetXY();
+function cameraToScreen(x, y, imageWidth, imageHeight) {
+    const rect = camera.getBoundingClientRect();
 
-    setStatus("กล้องพร้อม — กำลังตรวจจับกรอบ");
-    setInstructions(
-      "ถ้าหากรอบไม่เจอ ให้กด “เลือก 4 มุมเอง” ด้านบน"
+    const scale = Math.max(
+        rect.width / imageWidth,
+        rect.height / imageHeight
     );
 
-    startButton.textContent = "ปิดกล้อง";
-    startButton.onclick = () => stopCamera();
+    const displayedWidth = imageWidth * scale;
+    const displayedHeight = imageHeight * scale;
 
-    requestAnimationFrame(detectLoop);
-  } catch (error) {
-    console.error(error);
+    const offsetX = (rect.width - displayedWidth) / 2;
+    const offsetY = (rect.height - displayedHeight) / 2;
 
-    setStatus("เปิดกล้องไม่สำเร็จ: " + error.message);
-    setInstructions(
-      "ตรวจสอบสิทธิ์กล้องและการโหลด OpenCV.js"
+    return {
+        x: rect.left + offsetX + x * scale,
+        y: rect.top + offsetY + y * scale
+    };
+}
+
+
+// 12. DRAW TV OUTLINE
+// ================================================
+
+function drawDetectedTV(points, width, height) {
+    const screenPoints = points.map(point =>
+        cameraToScreen(
+            point.x,
+            point.y,
+            width,
+            height
+        )
     );
 
-    stopCamera(false);
-  }
+    if (!lastTVPoints) {
+        lastTVPoints = screenPoints.map(p => ({
+            x: p.x,
+            y: p.y
+        }));
+    } else {
+        for (let i = 0; i < 4; i++) {
+            lastTVPoints[i].x +=
+                (screenPoints[i].x - lastTVPoints[i].x) *
+                SMOOTHING;
+
+            lastTVPoints[i].y +=
+                (screenPoints[i].y - lastTVPoints[i].y) *
+                SMOOTHING;
+        }
+    }
+
+    drawCurrentOverlay();
 }
 
-function prepareCanvases() {
-  const scale = Math.min(
-    1,
-    PROCESS_WIDTH / camera.videoWidth
-  );
+function drawCurrentOverlay() {
+    overlayContext.clearRect(
+        0,
+        0,
+        window.innerWidth,
+        window.innerHeight
+    );
 
-  processingCanvas.width = Math.round(
-    camera.videoWidth * scale
-  );
+    if (!lastTVPoints) return;
 
-  processingCanvas.height = Math.round(
-    camera.videoHeight * scale
-  );
+    overlayContext.beginPath();
 
-  resizeOverlayCanvas();
+    overlayContext.moveTo(
+        lastTVPoints[0].x,
+        lastTVPoints[0].y
+    );
+
+    for (let i = 1; i < 4; i++) {
+        overlayContext.lineTo(
+            lastTVPoints[i].x,
+            lastTVPoints[i].y
+        );
+    }
+
+    overlayContext.closePath();
+
+    overlayContext.strokeStyle = "#00FF66";
+    overlayContext.lineWidth = 3;
+    overlayContext.stroke();
+
+    const labels = ["TL", "TR", "BR", "BL"];
+
+    for (let i = 0; i < 4; i++) {
+        const p = lastTVPoints[i];
+
+        overlayContext.beginPath();
+        overlayContext.arc(p.x, p.y, 6, 0, Math.PI * 2);
+
+        overlayContext.fillStyle = "#00FF66";
+        overlayContext.fill();
+
+        overlayContext.font = "bold 14px Arial";
+        overlayContext.fillText(
+            labels[i],
+            p.x + 9,
+            p.y - 9
+        );
+    }
 }
 
-function resizeOverlayCanvas() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+function clearOverlay() {
+    lastTVPoints = null;
 
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-
-  overlayCanvas.width = Math.round(width * dpr);
-  overlayCanvas.height = Math.round(height * dpr);
-
-  overlayCanvas.style.width = width + "px";
-  overlayCanvas.style.height = height + "px";
-
-  overlayContext?.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  drawOverlay();
+    overlayContext.clearRect(
+        0,
+        0,
+        window.innerWidth,
+        window.innerHeight
+    );
 }
 
-window.addEventListener("resize", resizeOverlayCanvas);
-window.addEventListener("orientationchange", () => {
-  setTimeout(resizeOverlayCanvas, 300);
-});
 
-function stopCamera(updateStatus = true) {
-  running = false;
+// 13. MAIN DETECTION LOOP
+// ================================================
 
-  if (loopTimer) {
-    clearTimeout(loopTimer);
-    loopTimer = null;
-  }
+function startDetection() {
+    if (detectionRunning) return;
 
-  if (stream) {
-    stream.getTracks().forEach((track) => track.stop());
-    stream = null;
-  }
-
-  if (camera) {
-    camera.pause();
-    camera.srcObject = null;
-  }
-
-  if (startButton) {
-    startButton.textContent = "เปิดกล้อง";
-    startButton.onclick = startCamera;
-  }
-
-  if (updateStatus) {
-    setStatus("ปิดกล้องแล้ว");
-    setInstructions("กดเปิดกล้องเพื่อเริ่มใช้งาน");
-  }
-
-  drawOverlay();
+    detectionRunning = true;
+    detectLoop();
 }
 
-window.stopStargazingCamera = stopCamera;
-
-// ---------- IMAGE PROCESSING ----------
 function detectLoop() {
-  if (!running) return;
+    if (!detectionRunning || !cameraStarted) return;
 
-  try {
+    detectionTimer = setTimeout(() => {
+        requestAnimationFrame(detectLoop);
+    }, DETECTION_INTERVAL);
+
     if (
-      camera.readyState >= 2 &&
-      processingCanvas.width > 0 &&
-      processingCanvas.height > 0
+        !openCVReady ||
+        camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
+        camera.videoWidth === 0 ||
+        camera.videoHeight === 0
     ) {
-      processingContext.drawImage(
+        return;
+    }
+
+    const now = performance.now();
+
+    if (now - lastDetectionTime < DETECTION_INTERVAL) return;
+
+    lastDetectionTime = now;
+
+    const width = PROCESS_WIDTH;
+
+    const height = Math.round(
+        camera.videoHeight *
+        (width / camera.videoWidth)
+    );
+
+    canvas.width = width;
+    canvas.height = height;
+
+    processingContext.drawImage(
         camera,
         0,
         0,
-        processingCanvas.width,
-        processingCanvas.height
-      );
+        width,
+        height
+    );
 
-      if (!manualMode) {
-        const candidates = findRectangleCandidates();
+    let src = null;
 
-        if (candidates.length > 0) {
-          lastRectangle = candidates[0].points;
-          lostFrames = 0;
-          calculateXY(lastRectangle);
-          setStatus("ตรวจพบกรอบสี่เหลี่ยม");
-        } else {
-          lostFrames++;
+    try {
+        src = cv.imread(canvas);
 
-          if (lostFrames > MAX_LOST_FRAMES) {
-            lastRectangle = null;
-            resetXY();
-            setStatus(
-              "ไม่พบสี่เหลี่ยม — กดเลือก 4 มุมเองได้"
-            );
-          }
+        const candidates = findTVCandidates(src);
+
+        if (candidates.length === 0) {
+            lostFrames++;
+
+            statusText.textContent =
+                "ยังไม่พบจอ TV — ลองปรับมุมกล้อง";
+
+            xText.textContent = "--";
+            yText.textContent = "--";
+
+            if (lostFrames > MAX_LOST_FRAMES) {
+                clearOverlay();
+            }
+
+            return;
         }
-      }
 
-      drawOverlay();
-    }
-  } catch (error) {
-    console.error("Detection error:", error);
-    setStatus("เกิดข้อผิดพลาดในการตรวจจับ");
-  }
+        // Use the highest-scoring candidate
+        const best = candidates[0];
 
-  loopTimer = setTimeout(() => {
-    requestAnimationFrame(detectLoop);
-  }, DETECTION_INTERVAL);
-}
+        lostFrames = 0;
 
-function findRectangleCandidates() {
-  const candidates = [];
+        drawDetectedTV(
+            best.points,
+            width,
+            height
+        );
 
-  let src;
-  let gray;
-  let enhanced;
-  let edges;
-  let hierarchy;
-  let contours;
+        const xy = calculateXY(
+            best.points,
+            width,
+            height
+        );
 
-  try {
-    src = cv.imread(processingCanvas);
-    gray = new cv.Mat();
-    enhanced = new cv.Mat();
-    edges = new cv.Mat();
-    hierarchy = new cv.Mat();
-    contours = new cv.MatVector();
+        xText.textContent = xy.x.toFixed(3);
+        yText.textContent = xy.y.toFixed(3);
 
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+        statusText.textContent =
+            "พบกรอบจอที่เป็นไปได้ | X: " +
+            xy.x.toFixed(3) +
+            " Y: " +
+            xy.y.toFixed(3);
 
-    // Improve contrast to help with dark screen borders.
-    const clahe = new cv.CLAHE(2.5, new cv.Size(8, 8));
+    } catch (error) {
+        console.error("Detection error:", error);
 
-    try {
-      clahe.apply(gray, enhanced);
+        statusText.textContent =
+            "เกิดข้อผิดพลาดในการตรวจจับ";
+
     } finally {
-      clahe.delete();
+        if (src) src.delete();
+    }
+}
+
+
+// 14. STOP CAMERA
+// ================================================
+
+function stopCamera() {
+    detectionRunning = false;
+
+    if (detectionTimer !== null) {
+        clearTimeout(detectionTimer);
+        detectionTimer = null;
     }
 
-    cv.GaussianBlur(
-      enhanced,
-      enhanced,
-      new cv.Size(5, 5),
-      0
-    );
-
-    cv.Canny(enhanced, edges, 35, 110);
-
-    const kernel = cv.getStructuringElement(
-      cv.MORPH_RECT,
-      new cv.Size(3, 3)
-    );
-
-    try {
-      cv.dilate(
-        edges,
-        edges,
-        kernel,
-        new cv.Point(-1, -1),
-        1
-      );
-    } finally {
-      kernel.delete();
+    if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        cameraStream = null;
     }
 
-    cv.findContours(
-      edges,
-      contours,
-      hierarchy,
-      cv.RETR_LIST,
-      cv.CHAIN_APPROX_SIMPLE
-    );
+    camera.srcObject = null;
+    cameraStarted = false;
 
-    const imageArea =
-      processingCanvas.width * processingCanvas.height;
+    clearOverlay();
 
-    for (let i = 0; i < contours.size(); i++) {
-      const contour = contours.get(i);
+    xText.textContent = "--";
+    yText.textContent = "--";
 
-      try {
-        const perimeter = cv.arcLength(contour, true);
-        const approx = new cv.Mat();
+    startButton.style.display = "";
+    startButton.disabled = false;
 
-        try {
-          cv.approxPolyDP(
-            contour,
-            approx,
-            0.025 * perimeter,
-            true
-          );
-
-          if (approx.rows !== 4 || !cv.isContourConvex(approx)) {
-            continue;
-          }
-
-          const area = Math.abs(cv.contourArea(approx));
-          const areaRatio = area / imageArea;
-
-          if (
-            areaRatio < MIN_RECT_AREA ||
-            areaRatio > MAX_RECT_AREA
-          ) {
-            continue;
-          }
-
-          const rawPoints = [];
-
-          for (let j = 0; j < 4; j++) {
-            rawPoints.push({
-              x: approx.data32S[j * 2],
-              y: approx.data32S[j * 2 + 1]
-            });
-          }
-
-          const points = orderPoints(rawPoints);
-
-          if (!isValidRectangle(points)) continue;
-
-          const score = scoreRectangle(points, areaRatio);
-
-          candidates.push({
-            points,
-            area,
-            score
-          });
-        } finally {
-          approx.delete();
-        }
-      } finally {
-        contour.delete();
-      }
-    }
-
-    candidates.sort((a, b) => b.score - a.score);
-
-    return candidates;
-  } catch (error) {
-    console.error("Rectangle detection error:", error);
-    return [];
-  } finally {
-    src?.delete();
-    gray?.delete();
-    enhanced?.delete();
-    edges?.delete();
-    hierarchy?.delete();
-    contours?.delete();
-  }
+    statusText.textContent = "ปิดกล้องแล้ว";
 }
 
-function scoreRectangle(points, areaRatio) {
-  const [tl, tr, br, bl] = points;
-
-  const top = distance(tl, tr);
-  const right = distance(tr, br);
-  const bottom = distance(br, bl);
-  const left = distance(bl, tl);
-
-  const oppositeSideSimilarity =
-    Math.min(top, bottom) / Math.max(top, bottom) +
-    Math.min(left, right) / Math.max(left, right);
-
-  // Prefer larger, reasonably regular rectangles.
-  return areaRatio * 100 + oppositeSideSimilarity * 10;
-}
-
-function distance(a, b) {
-  return Math.hypot(b.x - a.x, b.y - a.y);
-}
-
-function orderPoints(points) {
-  const center = points.reduce(
-    (sum, point) => ({
-      x: sum.x + point.x / 4,
-      y: sum.y + point.y / 4
-    }),
-    { x: 0, y: 0 }
-  );
-
-  const sorted = [...points].sort((a, b) => {
-    const angleA = Math.atan2(
-      a.y - center.y,
-      a.x - center.x
-    );
-
-    const angleB = Math.atan2(
-      b.y - center.y,
-      b.x - center.x
-    );
-
-    return angleA - angleB;
-  });
-
-  // Rotate the sequence so the first point is top-left.
-  let startIndex = 0;
-  let bestScore = Infinity;
-
-  sorted.forEach((point, index) => {
-    const score = point.x + point.y;
-
-    if (score < bestScore) {
-      bestScore = score;
-      startIndex = index;
-    }
-  });
-
-  const rotated = [
-    ...sorted.slice(startIndex),
-    ...sorted.slice(0, startIndex)
-  ];
-
-  // Ensure clockwise ordering.
-  const cross =
-    (rotated[1].x - rotated[0].x) *
-      (rotated[2].y - rotated[1].y) -
-    (rotated[1].y - rotated[0].y) *
-      (rotated[2].x - rotated[1].x);
-
-  if (cross < 0) {
-    return [
-      rotated[0],
-      rotated[3],
-      rotated[2],
-      rotated[1]
-    ];
-  }
-
-  return rotated;
-}
-
-function isValidRectangle(points) {
-  if (!points || points.length !== 4) return false;
-
-  const area = Math.abs(
-    points.reduce((sum, p, i) => {
-      const next = points[(i + 1) % 4];
-      return sum + p.x * next.y - next.x * p.y;
-    }, 0) / 2
-  );
-
-  if (area < 100) return false;
-
-  for (let i = 0; i < 4; i++) {
-    const a = points[i];
-    const b = points[(i + 1) % 4];
-    const c = points[(i + 2) % 4];
-
-    const cross =
-      (b.x - a.x) * (c.y - b.y) -
-      (b.y - a.y) * (c.x - b.x);
-
-    if (Math.abs(cross) < 1) return false;
-  }
-
-  return true;
-}
-
-// ---------- MANUAL CORNER SELECTION ----------
-function enableManualMode() {
-  if (!running) {
-    setStatus("กรุณาเปิดกล้องก่อน");
-    setInstructions("กดเปิดกล้องก่อนเลือกมุม");
-    return;
-  }
-
-  manualMode = true;
-  selectedPoints = [];
-  lastRectangle = null;
-
-  resetXY();
-
-  overlayCanvas.style.pointerEvents = "auto";
-  overlayCanvas.style.touchAction = "none";
-
-  setStatus("โหมดเลือก 4 มุมเอง");
-  setInstructions(
-    "แตะมุมซ้ายบน → ขวาบน → ขวาล่าง → ซ้ายล่าง บนภาพกล้อง"
-  );
-
-  drawOverlay();
-}
-
-function enableAutoMode() {
-  manualMode = false;
-  selectedPoints = [];
-  lastRectangle = null;
-  lostFrames = 0;
-
-  overlayCanvas.style.pointerEvents = "none";
-  overlayCanvas.style.touchAction = "manipulation";
-
-  resetXY();
-
-  setStatus("กลับไปตรวจจับอัตโนมัติ");
-  setInstructions(
-    "กำลังค้นหากรอบสี่เหลี่ยม หากไม่พบให้เลือก 4 มุมเอง"
-  );
-
-  drawOverlay();
-}
-
-function resetManualPoints() {
-  if (!manualMode) {
-    setStatus("กด “เลือก 4 มุมเอง” ก่อน");
-    return;
-  }
-
-  selectedPoints = [];
-  lastRectangle = null;
-  resetXY();
-
-  setStatus("ล้างมุมแล้ว — เริ่มแตะใหม่");
-  setInstructions(
-    "แตะมุมซ้ายบน → ขวาบน → ขวาล่าง → ซ้ายล่าง"
-  );
-
-  drawOverlay();
-}
-
-function screenToProcessingPoint(clientX, clientY) {
-  const rect = camera.getBoundingClientRect();
-
-  if (
-    !rect.width ||
-    !rect.height ||
-    !camera.videoWidth ||
-    !camera.videoHeight ||
-    !processingCanvas.width ||
-    !processingCanvas.height
-  ) {
-    return null;
-  }
-
-  // Map a tap to the visible video, accounting for object-fit: cover.
-  const videoRatio = camera.videoWidth / camera.videoHeight;
-  const boxRatio = rect.width / rect.height;
-
-  let renderedWidth;
-  let renderedHeight;
-  let offsetX = 0;
-  let offsetY = 0;
-
-  const fit = getComputedStyle(camera).objectFit;
-
-  if (fit === "contain") {
-    if (videoRatio > boxRatio) {
-      renderedWidth = rect.width;
-      renderedHeight = rect.width / videoRatio;
-      offsetY = (rect.height - renderedHeight) / 2;
-    } else {
-      renderedHeight = rect.height;
-      renderedWidth = rect.height * videoRatio;
-      offsetX = (rect.width - renderedWidth) / 2;
-    }
-  } else {
-    // Default to cover.
-    if (videoRatio > boxRatio) {
-      renderedHeight = rect.height;
-      renderedWidth = rect.height * videoRatio;
-      offsetX = (rect.width - renderedWidth) / 2;
-    } else {
-      renderedWidth = rect.width;
-      renderedHeight = rect.width / videoRatio;
-      offsetY = (rect.height - renderedHeight) / 2;
-    }
-  }
-
-  const localX = clientX - rect.left - offsetX;
-  const localY = clientY - rect.top - offsetY;
-
-  const videoX = localX * camera.videoWidth / renderedWidth;
-  const videoY = localY * camera.videoHeight / renderedHeight;
-
-  if (
-    videoX < 0 ||
-    videoY < 0 ||
-    videoX > camera.videoWidth ||
-    videoY > camera.videoHeight
-  ) {
-    return null;
-  }
-
-  return {
-    x: videoX * processingCanvas.width / camera.videoWidth,
-    y: videoY * processingCanvas.height / camera.videoHeight
-  };
-}
-
-function handleManualTap(event) {
-  if (!running || !manualMode) return;
-
-  event.preventDefault();
-
-  if (selectedPoints.length >= 4) return;
-
-  const point = screenToProcessingPoint(
-    event.clientX,
-    event.clientY
-  );
-
-  if (!point) {
-    setStatus("แตะภายในพื้นที่ภาพกล้อง");
-    return;
-  }
-
-  selectedPoints.push(point);
-
-  const names = [
-    "ซ้ายบน",
-    "ขวาบน",
-    "ขวาล่าง",
-    "ซ้ายล่าง"
-  ];
-
-  drawOverlay();
-
-  if (selectedPoints.length < 4) {
-    const nextName = names[selectedPoints.length];
-
-    setStatus(
-      `เลือกแล้ว ${selectedPoints.length}/4 มุม`
-    );
-
-    setInstructions(
-      `เลือกมุม${nextName} เป็นจุดที่ ${selectedPoints.length + 1}`
-    );
-    return;
-  }
-
-  if (!isValidRectangle(selectedPoints)) {
-    setStatus("มุมที่เลือกไม่เป็นกรอบสี่เหลี่ยม");
-    setInstructions(
-      "กด “ล้างมุมที่เลือก” แล้วแตะ 4 มุมใหม่ตามลำดับ"
-    );
-    selectedPoints = [];
-    resetXY();
-    drawOverlay();
-    return;
-  }
-
-  lastRectangle = [...selectedPoints];
-
-  calculateXY(lastRectangle);
-
-  setStatus("เลือกครบ 4 มุมแล้ว");
-  setInstructions(
-    "สำเร็จ! หากต้องการเลือกใหม่ กด “ล้างมุมที่เลือก”"
-  );
-
-  drawOverlay();
-}
-
-// Listen for touch/pointer input on the overlay.
-overlayCanvas.addEventListener(
-  "pointerdown",
-  handleManualTap,
-  { passive: false }
-);
-
-// ---------- X/Y CALCULATION ----------
-function calculateXY(points) {
-  if (!points || points.length !== 4) {
-    resetXY();
-    return;
-  }
-
-  let src;
-  let dst;
-  let transform;
-  let result;
-
-  try {
-    const [tl, tr, br, bl] = points;
-
-    src = cv.matFromArray(4, 1, cv.CV_32FC2, [
-      tl.x, tl.y,
-      tr.x, tr.y,
-      br.x, br.y,
-      bl.x, bl.y
-    ]);
-
-    const w = processingCanvas.width;
-    const h = processingCanvas.height;
-
-    dst = cv.matFromArray(4, 1, cv.CV_32FC2, [
-      0, 0,
-      w - 1, 0,
-      w - 1, h - 1,
-      0, h - 1
-    ]);
-
-    transform = cv.getPerspectiveTransform(src, dst);
-
-    // Map the camera image center into the selected rectangle's
-    // normalized coordinate system.
-    const center = cv.matFromArray(1, 1, cv.CV_32FC2, [
-      w / 2, h / 2
-    ]);
-
-    result = new cv.Mat();
-
-    try {
-      cv.perspectiveTransform(center, result, transform);
-
-      const x = result.data32F[0] / (w - 1);
-      const y = result.data32F[1] / (h - 1);
-
-      setXY(
-        Math.max(0, Math.min(1, x)),
-        Math.max(0, Math.min(1, y))
-      );
-    } finally {
-      center.delete();
-    }
-  } catch (error) {
-    console.error("Coordinate calculation error:", error);
-    resetXY();
-  } finally {
-    src?.delete();
-    dst?.delete();
-    transform?.delete();
-    result?.delete();
-  }
-}
-
-// ---------- DRAW OVERLAY ----------
-function cameraToScreen(point) {
-  const rect = camera.getBoundingClientRect();
-
-  if (
-    !rect.width ||
-    !rect.height ||
-    !camera.videoWidth ||
-    !camera.videoHeight
-  ) {
-    return { x: 0, y: 0 };
-  }
-
-  const videoRatio = camera.videoWidth / camera.videoHeight;
-  const boxRatio = rect.width / rect.height;
-
-  let renderedWidth;
-  let renderedHeight;
-  let offsetX = 0;
-  let offsetY = 0;
-
-  const fit = getComputedStyle(camera).objectFit;
-
-  if (fit === "contain") {
-    if (videoRatio > boxRatio) {
-      renderedWidth = rect.width;
-      renderedHeight = rect.width / videoRatio;
-      offsetY = (rect.height - renderedHeight) / 2;
-    } else {
-      renderedHeight = rect.height;
-      renderedWidth = rect.height * videoRatio;
-      offsetX = (rect.width - renderedWidth) / 2;
-    }
-  } else {
-    if (videoRatio > boxRatio) {
-      renderedHeight = rect.height;
-      renderedWidth = rect.height * videoRatio;
-      offsetX = (rect.width - renderedWidth) / 2;
-    } else {
-      renderedWidth = rect.width;
-      renderedHeight = rect.width / videoRatio;
-      offsetY = (rect.height - renderedHeight) / 2;
-    }
-  }
-
-  return {
-    x:
-      rect.left +
-      offsetX +
-      (point.x / processingCanvas.width) * renderedWidth,
-    y:
-      rect.top +
-      offsetY +
-      (point.y / processingCanvas.height) * renderedHeight
-  };
-}
-
-function drawOverlay() {
-  if (!overlayContext) return;
-
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-
-  overlayContext.clearRect(0, 0, width, height);
-
-  let points = null;
-  let color = "#22ff77";
-
-  if (manualMode && selectedPoints.length > 0) {
-    points = selectedPoints;
-    color = "#00e5ff";
-  } else if (!manualMode && lastRectangle) {
-    points = lastRectangle;
-    color = "#22ff77";
-  }
-
-  if (!points || points.length === 0) return;
-
-  const screenPoints = points.map(cameraToScreen);
-
-  // Draw connected edges.
-  overlayContext.beginPath();
-  overlayContext.moveTo(
-    screenPoints[0].x,
-    screenPoints[0].y
-  );
-
-  for (let i = 1; i < screenPoints.length; i++) {
-    overlayContext.lineTo(
-      screenPoints[i].x,
-      screenPoints[i].y
-    );
-  }
-
-  if (screenPoints.length === 4) {
-    overlayContext.closePath();
-  }
-
-  overlayContext.strokeStyle = color;
-  overlayContext.lineWidth = 3;
-  overlayContext.stroke();
-
-  const labels = ["TL", "TR", "BR", "BL"];
-
-  screenPoints.forEach((point, index) => {
-    overlayContext.beginPath();
-    overlayContext.arc(point.x, point.y, 7, 0, Math.PI * 2);
-
-    overlayContext.fillStyle = color;
-    overlayContext.fill();
-
-    overlayContext.lineWidth = 2;
-    overlayContext.strokeStyle = "#ffffff";
-    overlayContext.stroke();
-
-    overlayContext.font = "bold 14px Arial";
-    overlayContext.fillStyle = "#ffffff";
-    overlayContext.shadowColor = "#000000";
-    overlayContext.shadowBlur = 4;
-
-    overlayContext.fillText(
-      labels[index],
-      point.x + 10,
-      point.y - 10
-    );
-
-    overlayContext.shadowBlur = 0;
-  });
-}
-
-// ---------- STARTUP ----------
-createControls();
-
-if (startButton) {
-  startButton.textContent = "เปิดกล้อง";
-  startButton.onclick = startCamera;
-}
-
-setStatus("พร้อม — กดเปิดกล้อง");
-setInstructions(
-  "ปุ่มเลือกมุมอยู่ด้านบนของหน้าจอ"
-);
-
-// Resize overlay after initial layout.
-requestAnimationFrame(resizeOverlayCanvas);
+// เรียก stopCamera() จาก Console ได้เมื่อต้องการปิดกล้อง
+window.stopStargazingCamera = stopCamera;
