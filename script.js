@@ -454,10 +454,9 @@ function startDetection() {
 
 
     statusText.textContent =
-        "กำลังตรวจจับ TV...";
+    "กำลังหาสี่เหลี่ยมกลางภาพ...";
 
-
-    detectTV();
+detectLargestRectangle();
 
 }
 
@@ -855,578 +854,192 @@ function calculateXY(
 }
 
 
-// ========================================
-// ตรวจจับ TV
-// ========================================
-
-function detectTV() {
-
-    if (!cameraStarted) {
-
-        requestAnimationFrame(
-            detectTV
-        );
-
-        return;
-
-    }
-
-
-    if (
-
+function detectLargestRectangle() {
+    if (!cameraStarted ||
         camera.videoWidth === 0 ||
-
-        camera.videoHeight === 0
-
-    ) {
-
-        requestAnimationFrame(
-            detectTV
-        );
-
+        camera.videoHeight === 0) {
+        requestAnimationFrame(detectLargestRectangle);
         return;
-
     }
 
-
-    // ====================================
-    // ขนาดภาพสำหรับ OpenCV
-    // ====================================
-
-    const width =
-        640;
-
-
-    const height =
-        Math.round(
-
-            camera.videoHeight *
-            (
-                width /
-                camera.videoWidth
-            )
-
-        );
-
-
-    canvas.width =
-        width;
-
-
-    canvas.height =
-        height;
-
-
-    // ====================================
-    // เอาภาพกล้องเข้า Canvas
-    // ====================================
-
-    const context =
-        canvas.getContext(
-            "2d"
-        );
-
-
-    context.drawImage(
-
-        camera,
-
-        0,
-        0,
-
-        width,
-        height
-
+    const width = 640;
+    const height = Math.round(
+        camera.videoHeight * width / camera.videoWidth
     );
 
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext("2d");
+    context.drawImage(camera, 0, 0, width, height);
+
+    let src, gray, blurred, edges, contours, hierarchy;
 
     try {
+        src = cv.imread(canvas);
+        gray = new cv.Mat();
+        blurred = new cv.Mat();
+        edges = new cv.Mat();
+        contours = new cv.MatVector();
+        hierarchy = new cv.Mat();
 
-        // =================================
-        // อ่านภาพ
-        // =================================
-
-        let src =
-            cv.imread(
-                canvas
-            );
-
-
-        // =================================
-        // Grayscale
-        // =================================
-
-        let gray =
-            new cv.Mat();
-
-
-        cv.cvtColor(
-
-            src,
-
-            gray,
-
-            cv.COLOR_RGBA2GRAY
-
-        );
-
-
-        // =================================
-        // Blur
-        // =================================
-
-        let blurred =
-            new cv.Mat();
-
-
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
         cv.GaussianBlur(
-
-            gray,
-
-            blurred,
-
-            new cv.Size(
-                5,
-                5
-            ),
-
-            0
-
+            gray, blurred, new cv.Size(5, 5), 0
         );
-
-
-        // =================================
-        // Canny
-        // =================================
-
-        let edges =
-            new cv.Mat();
-
-
-        cv.Canny(
-
-            blurred,
-
-            edges,
-
-            50,
-            150
-
-        );
-
-
-        // =================================
-        // Contours
-        // =================================
-
-        let contours =
-            new cv.MatVector();
-
-
-        let hierarchy =
-            new cv.Mat();
-
+        cv.Canny(blurred, edges, 50, 150);
 
         cv.findContours(
-
             edges,
-
             contours,
-
             hierarchy,
-
             cv.RETR_LIST,
-
             cv.CHAIN_APPROX_SIMPLE
-
         );
 
+        const imageArea = width * height;
 
-        // =================================
-        // หา candidate
-        // =================================
+        // พื้นที่ค้นหากลางภาพ: 60% ของความกว้างและความสูง
+        const centerLeft = width * 0.20;
+        const centerRight = width * 0.80;
+        const centerTop = height * 0.20;
+        const centerBottom = height * 0.80;
 
         let candidates = [];
 
+        for (let i = 0; i < contours.size(); i++) {
+            let contour = contours.get(i);
+            let approx = null;
 
-        const imageArea =
-            width *
-            height;
+            try {
+                const contourArea = cv.contourArea(contour);
 
+                if (contourArea < 2500 ||
+                    contourArea > imageArea * 0.90) {
+                    continue;
+                }
 
-        for (
+                const perimeter = cv.arcLength(contour, true);
+                approx = new cv.Mat();
 
-            let i = 0;
-
-            i <
-            contours.size();
-
-            i++
-
-        ) {
-
-            let contour =
-                contours.get(i);
-
-
-            let area =
-                cv.contourArea(
-                    contour
-                );
-
-
-            // ขนาดเล็กเกินไป
-
-            if (
-                area < 2500
-            ) {
-
-                contour.delete();
-
-                continue;
-
-            }
-
-
-            const areaRatio =
-                area /
-                imageArea;
-
-
-            // ไม่เอาเล็กเกิน
-            // และไม่เอาเต็มภาพ
-
-            if (
-
-                areaRatio < 0.02 ||
-
-                areaRatio > 0.97
-
-            ) {
-
-                contour.delete();
-
-                continue;
-
-            }
-
-
-            let perimeter =
-                cv.arcLength(
-
+                cv.approxPolyDP(
                     contour,
-
+                    approx,
+                    0.02 * perimeter,
                     true
-
                 );
 
-
-            let approx =
-                new cv.Mat();
-
-
-            cv.approxPolyDP(
-
-                contour,
-
-                approx,
-
-                0.02 *
-                perimeter,
-
-                true
-
-            );
-
-
-            // =================================
-            // ต้องเป็น 4 มุม
-            // =================================
-
-            if (
-                approx.rows === 4
-            ) {
+                // ต้องมี 4 มุม
+                if (approx.rows !== 4) continue;
 
                 let points = [];
 
-
-                for (
-
-                    let j = 0;
-
-                    j < 4;
-
-                    j++
-
-                ) {
-
-                    let px =
-                        approx.intPtr(
-                            j,
-                            0
-                        )[0];
-
-
-                    let py =
-                        approx.intPtr(
-                            j,
-                            0
-                        )[1];
-
-
-                    points.push({
-
-                        x: px,
-
-                        y: py
-
-                    });
-
+                for (let j = 0; j < 4; j++) {
+                    const p = approx.intPtr(j, 0);
+                    points.push({ x: p[0], y: p[1] });
                 }
 
+                points = orderPoints(points);
 
-                // จัดลำดับมุม
+                const xs = points.map(p => p.x);
+                const ys = points.map(p => p.y);
 
-                points =
-                    orderPoints(
-                        points
-                    );
+                const minX = Math.min(...xs);
+                const maxX = Math.max(...xs);
+                const minY = Math.min(...ys);
+                const maxY = Math.max(...ys);
 
+                const boxWidth = maxX - minX;
+                const boxHeight = maxY - minY;
 
-                // =================================
-                // Bounding Box
-                // =================================
+                // กรองกรอบที่เล็กเกินไป
+                if (boxWidth < 60 || boxHeight < 60) continue;
 
-                let minX =
-                    Math.min(
+                // จุดกึ่งกลางของสี่เหลี่ยม
+                const centerX = (minX + maxX) / 2;
+                const centerY = (minY + maxY) / 2;
 
-                        ...points.map(
-                            p => p.x
-                        )
-
-                    );
-
-
-                let maxX =
-                    Math.max(
-
-                        ...points.map(
-                            p => p.x
-                        )
-
-                    );
-
-
-                let minY =
-                    Math.min(
-
-                        ...points.map(
-                            p => p.y
-                        )
-
-                    );
-
-
-                let maxY =
-                    Math.max(
-
-                        ...points.map(
-                            p => p.y
-                        )
-
-                    );
-
-
-                const boxWidth =
-                    maxX -
-                    minX;
-
-
-                const boxHeight =
-                    maxY -
-                    minY;
-
-
-                // =================================
-                // ขนาดขั้นต่ำ
-                // =================================
-
+                // ต้องอยู่ในบริเวณกลางภาพ
                 if (
-
-                    boxWidth > 80 &&
-
-                    boxHeight > 50
-
+                    centerX < centerLeft ||
+                    centerX > centerRight ||
+                    centerY < centerTop ||
+                    centerY > centerBottom
                 ) {
-
-                    const ratio =
-                        boxWidth /
-                        boxHeight;
-
-
-                    // aspect ratio
-                    // ของจอแนวนอน
-
-                    if (
-
-                        ratio > 1.05 &&
-
-                        ratio < 4.5
-
-                    ) {
-
-                        candidates.push({
-
-                            area: area,
-
-                            points: points
-
-                        });
-
-                    }
-
+                    continue;
                 }
 
+                // คำนวณพื้นที่จากจุดทั้ง 4
+                // ใช้พื้นที่รูปหลายเหลี่ยมแทน contourArea
+                let polygonArea = 0;
+
+                for (let j = 0; j < 4; j++) {
+                    const next = (j + 1) % 4;
+                    polygonArea +=
+                        points[j].x * points[next].y -
+                        points[next].x * points[j].y;
+                }
+
+                polygonArea = Math.abs(polygonArea) / 2;
+
+                candidates.push({
+                    area: polygonArea,
+                    points: points
+                });
+            } finally {
+                if (approx) approx.delete();
+                contour.delete();
             }
-
-
-            approx.delete();
-
-            contour.delete();
-
         }
 
+        // เลือกกรอบที่ใหญ่ที่สุดจากกรอบในบริเวณกลางภาพ
+        candidates.sort((a, b) => b.area - a.area);
 
-        // =================================
-        // เลือก candidate ที่ใหญ่สุด
-        // =================================
-
-        let bestCandidate =
-            null;
-
-
-        if (
-            candidates.length > 0
-        ) {
-
-            candidates.sort(
-
-                (a, b) =>
-                    b.area -
-                    a.area
-
-            );
-
-
-            bestCandidate =
-                candidates[0];
-
-        }
-
-
-        // =================================
-        // เจอ TV
-        // =================================
+        const bestCandidate =
+            candidates.length > 0 ? candidates[0] : null;
 
         if (bestCandidate) {
-
             lostFrames = 0;
 
-
             statusText.textContent =
-                "เจอรูปทรง 4 มุมแล้ว";
-
-
-            // --------------------------------
-            // วาดกรอบ
-            // --------------------------------
+                "พบสี่เหลี่ยมกลางภาพ";
 
             drawDetectedTV(
-
                 bestCandidate.points,
-
                 width,
-
                 height
-
             );
 
-
-            // --------------------------------
-            // คำนวณ X/Y
-            // --------------------------------
-
+            // คำนวณ X/Y ด้วยระบบเดิม
+            // ไม่ส่งข้อมูลไป Node.js ในขั้นนี้
             calculateXY(
-
                 bestCandidate.points,
-
                 width,
-
                 height
-
             );
-
-        }
-
-        else {
-
+        } else {
             lostFrames++;
 
-
             statusText.textContent =
-                "กำลังหา TV...";
+                "กำลังหาสี่เหลี่ยมกลางภาพ...";
 
-
-            if (
-
-                lostFrames >
-                maxLostFrames
-
-            ) {
-
+            if (lostFrames > maxLostFrames) {
                 clearOverlay();
-
-                lastTVPoints =
-                    null;
-
+                lastTVPoints = null;
             }
-
         }
-
-
-        // =================================
-        // Cleanup
-        // =================================
-
-        src.delete();
-
-        gray.delete();
-
-        blurred.delete();
-
-        edges.delete();
-
-        contours.delete();
-
-        hierarchy.delete();
-
-
+    } catch (error) {
+        console.error("Rectangle Detection Error:", error);
+    } finally {
+        if (src) src.delete();
+        if (gray) gray.delete();
+        if (blurred) blurred.delete();
+        if (edges) edges.delete();
+        if (contours) contours.delete();
+        if (hierarchy) hierarchy.delete();
     }
 
-    catch (error) {
-
-        console.error(
-            "OpenCV Error:",
-            error
-        );
-
-    }
-
-
-    requestAnimationFrame(
-        detectTV
-    );
-
+    requestAnimationFrame(detectLargestRectangle);
 }
 
 
