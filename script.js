@@ -61,7 +61,7 @@ let websocketConnected = false;
 // ========================================
 
 const WEBSOCKET_URL = "wss://recovery-nose-evanescence-wolf.trycloudflare.com";
-const HTTP_URL = "https://hourly-contrast-expense-guitars.trycloudflare.com/xy";
+const HTTP_URL = "https://postage-appears-nick-hearts.trycloudflare.com/xy";
 
 
 
