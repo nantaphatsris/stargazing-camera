@@ -60,9 +60,8 @@ let websocketConnected = false;
 // CLOUDFLARE WEBSOCKET URL
 // ========================================
 
-const WEBSOCKET_URL = "wss://resistance-chicago-retained-professor.trycloudflare.com";
-const HTTP_URL = " https://resistance-chicago-retained-professor.trycloudflare.com/xy";
-
+const WEBSOCKET_URL =
+    "wss://recovery-nose-evanescence-wolf.trycloudflare.com";
 
 
 // ========================================
@@ -202,12 +201,33 @@ function sendXYToServer(
 ) {
 
     // --------------------------------
+    // ยังไม่ได้เชื่อมต่อ
+    // --------------------------------
+
+    if (
+
+        !websocketConnected ||
+
+        !socket ||
+
+        socket.readyState !==
+            WebSocket.OPEN
+
+    ) {
+
+        return;
+
+    }
+
+
+    // --------------------------------
     // จำกัดความถี่
     // 50 ms = 20 ครั้ง / วินาที
     // --------------------------------
 
     const now =
         performance.now();
+
 
     if (
         now - lastSendTime <
@@ -217,6 +237,7 @@ function sendXYToServer(
         return;
 
     }
+
 
     lastSendTime =
         now;
@@ -235,6 +256,7 @@ function sendXYToServer(
             )
         );
 
+
     const safeY =
         Math.max(
             0,
@@ -246,46 +268,30 @@ function sendXYToServer(
 
 
     // --------------------------------
-    // ส่ง HTTP POST
+    // สร้างข้อมูล
     // --------------------------------
 
-    fetch(
-        HTTP_URL,
-        {
+    const message = {
 
-            method: "POST",
+        x: safeX,
 
-            headers: {
-                "Content-Type":
-                    "application/json"
-            },
+        y: safeY
 
-            body: JSON.stringify({
+    };
 
-                x: safeX,
-                y: safeY
 
-            })
+    // --------------------------------
+    // ส่ง
+    // --------------------------------
 
-        }
-    )
+    try {
 
-    .then(response => {
+        socket.send(
+            JSON.stringify(
+                message
+            )
+        );
 
-        if (!response.ok) {
-
-            throw new Error(
-                "HTTP " +
-                response.status
-            );
-
-        }
-
-        return response.json();
-
-    })
-
-    .then(data => {
 
         console.log(
             "📡 SEND X:",
@@ -294,20 +300,25 @@ function sendXYToServer(
             safeY.toFixed(3)
         );
 
-    })
+    }
 
-    .catch(error => {
+    catch (error) {
 
         console.error(
             "❌ ส่ง X/Y ไม่สำเร็จ:",
             error
         );
 
-    });
+    }
 
 }
 
 
+// ========================================
+// เริ่ม WebSocket
+// ========================================
+
+connectOSCBridge();
 
 
 // ========================================
@@ -1075,7 +1086,7 @@ function detectTV() {
             // ขนาดเล็กเกินไป
 
             if (
-                area < 2500
+                area < 5000
             ) {
 
                 contour.delete();
@@ -1095,9 +1106,9 @@ function detectTV() {
 
             if (
 
-                areaRatio < 0.02 ||
+                areaRatio < 0.05 ||
 
-                areaRatio > 0.97
+                areaRatio > 0.90
 
             ) {
 
@@ -1250,9 +1261,9 @@ function detectTV() {
 
                 if (
 
-                    boxWidth > 80 &&
+                    boxWidth > 100 &&
 
-                    boxHeight > 50
+                    boxHeight > 80
 
                 ) {
 
@@ -1266,9 +1277,9 @@ function detectTV() {
 
                     if (
 
-                        ratio > 1.05 &&
+                        ratio > 1.1 &&
 
-                        ratio < 4.5
+                        ratio < 3.5
 
                     ) {
 
