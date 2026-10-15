@@ -1,3 +1,9 @@
+JavaScript
+
+
+
+
+
 // ========================================
 // STARGAZING
 // Camera + OpenCV + TV Detection + X/Y
@@ -41,9 +47,6 @@ const statusText =
 let cameraStarted = false;
 
 let lastTVPoints = null;
-
-// จำตำแหน่งกึ่งกลางของกรอบที่ตรวจพบล่าสุด
-let lastDetectedCenter = null;
 
 let lostFrames = 0;
 
@@ -1304,96 +1307,25 @@ function detectTV() {
         // เลือก candidate ที่ใหญ่สุด
         // =================================
 
-        
-let bestCandidate = null;
-let bestScore = -Infinity;
+        let bestCandidate =
+            null;
 
-if (candidates.length > 0) {
-    for (const candidate of candidates) {
-        const points = candidate.points;
-
-        // 1. คำนวณขนาดและอัตราส่วนกรอบ
-        const xs = points.map(p => p.x);
-        const ys = points.map(p => p.y);
-
-        const minX = Math.min(...xs);
-        const maxX = Math.max(...xs);
-        const minY = Math.min(...ys);
-        const maxY = Math.max(...ys);
-
-        const boxWidth = maxX - minX;
-        const boxHeight = maxY - minY;
-
-        if (boxHeight <= 0 || boxWidth <= 0) {
-            continue;
-        }
-
-        const ratio = boxWidth / boxHeight;
-        const areaRatio = candidate.area / (width * height);
-
-        // ภาพท้องฟ้าโดยทั่วไปเป็นแนวนอน
-        // ค่า 16:9 เป็นเพียงค่าเริ่มต้น
-        const expectedRatio = 16 / 9;
 
         if (
-            ratio < 1.3 ||
-            ratio > 2.2 ||
-            areaRatio < 0.04 ||
-            areaRatio > 0.65
+            candidates.length > 0
         ) {
-            continue;
-        }
 
-        // 2. ให้คะแนนอัตราส่วนที่ใกล้ 16:9
-        const ratioScore = Math.exp(
-            -2 * Math.abs(Math.log(ratio / expectedRatio))
-        );
+            candidates.sort(
 
-        // 3. ให้คะแนนกรอบที่อยู่ใกล้กลางภาพกล้อง
-        const centerX = (minX + maxX) / 2;
-        const centerY = (minY + maxY) / 2;
+                (a, b) =>
+                    b.area -
+                    a.area
 
-        const dx = (centerX - width / 2) / (width / 2);
-        const dy = (centerY - height / 2) / (height / 2);
-
-        const centerDistance = Math.sqrt(dx * dx + dy * dy);
-        const centerScore = Math.exp(-centerDistance * 1.5);
-
-        // 4. ให้คะแนนขนาดที่สมเหตุสมผล
-        // ไม่จำเป็นต้องใหญ่ที่สุดเสมอไป
-        const areaScore = Math.exp(
-            -Math.abs(Math.log(areaRatio / 0.18))
-        );
-
-        // 5. ถ้ามีกรอบเดิม ให้คะแนนความต่อเนื่อง
-        let continuityScore = 0.5;
-
-        if (lastDetectedCenter !== null) {
-            const oldDx =
-                (centerX - lastDetectedCenter.x) / width;
-            const oldDy =
-                (centerY - lastDetectedCenter.y) / height;
-
-            const movement = Math.sqrt(
-                oldDx * oldDx + oldDy * oldDy
             );
 
-            continuityScore = Math.exp(-movement * 8);
-        }
 
-        // รวมคะแนนทุกด้าน
-        const score =
-            ratioScore * 0.40 +
-            centerScore * 0.25 +
-            areaScore * 0.15 +
-            continuityScore * 0.20;
-
-        if (score > bestScore) {
-            bestScore = score;
-            bestCandidate = candidate;
-        }
-    }
-}
+            bestCandidate =
+                candidates[0];
 
         }
 
@@ -1405,35 +1337,6 @@ if (candidates.length > 0) {
         if (bestCandidate) {
 
             lostFrames = 0;
-
-            
-if (bestCandidate) {
-
-    lostFrames = 0;
-
-    // จำตำแหน่งกรอบที่ตรวจพบล่าสุด
-    const points = bestCandidate.points;
-
-    lastDetectedCenter = {
-        x: points.reduce((sum, p) => sum + p.x, 0) / 4,
-        y: points.reduce((sum, p) => sum + p.y, 0) / 4
-    };
-
-    statusText.textContent = "เจอพื้นที่ภาพแล้ว";
-
-    drawDetectedTV(
-        bestCandidate.points,
-        width,
-        height
-    );
-
-    calculateXY(
-        bestCandidate.points,
-        width,
-        height
-    );
-}
-
 
 
             statusText.textContent =
@@ -1489,8 +1392,8 @@ if (bestCandidate) {
 
                 clearOverlay();
 
-                lastTVPoints = null;
-                 lastDetectedCenter = null;
+                lastTVPoints =
+                    null;
 
             }
 
