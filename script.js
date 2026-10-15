@@ -1,13 +1,8 @@
-JavaScript
-
-
-
-
 
 // ========================================
 // STARGAZING
 // Camera + OpenCV + TV Detection + X/Y
-// + WebSocket → Node.js → OSC
+// WebSocket → Node.js → OSC
 // ========================================
 
 
@@ -15,29 +10,16 @@ JavaScript
 // HTML ELEMENTS
 // ========================================
 
-const camera =
-    document.getElementById("camera");
-
-const startButton =
-    document.getElementById("startButton");
-
-const xText =
-    document.getElementById("x");
-
-const yText =
-    document.getElementById("y");
-
-const canvas =
-    document.getElementById("processingCanvas");
-
-const overlayCanvas =
-    document.getElementById("overlayCanvas");
-
-const overlayContext =
-    overlayCanvas.getContext("2d");
-
-const statusText =
-    document.getElementById("status");
+const camera = document.getElementById("camera");
+const startButton = document.getElementById("startButton");
+const xText = document.getElementById("x");
+const yText = document.getElementById("y");
+const canvas = document.getElementById("processingCanvas");
+const overlayCanvas = document.getElementById("overlayCanvas");
+const overlayContext = overlayCanvas
+    ? overlayCanvas.getContext("2d")
+    : null;
+const statusText = document.getElementById("status");
 
 
 // ========================================
@@ -45,278 +27,151 @@ const statusText =
 // ========================================
 
 let cameraStarted = false;
-
+let detectionRunning = false;
 let lastTVPoints = null;
-
+let lastDetectedCenter = null;
 let lostFrames = 0;
-
 const maxLostFrames = 8;
+
+
+// ========================================
+// SERVER URLS — KEEP EXISTING URLS
+// ========================================
+
+let socket = null;
+let websocketConnected = false;
+
+const WEBSOCKET_URL =
+    "wss://recovery-nose-evanescence-wolf.trycloudflare.com";
+
+const HTTP_URL =
+    "https://what-coordinated-drives-quotes.trycloudflare.com/xy";
+
+
+// ========================================
+// SEND X/Y SETTINGS
+// ========================================
+
+let lastSendTime = 0;
+const SEND_INTERVAL = 50;
+
+
+// ========================================
+// CHECK REQUIRED HTML ELEMENTS
+// ========================================
+
+console.log("STARGAZING JS LOADED");
+
+console.log({
+    camera: !!camera,
+    startButton: !!startButton,
+    processingCanvas: !!canvas,
+    overlayCanvas: !!overlayCanvas,
+    status: !!statusText
+});
+
+if (!camera || !startButton || !canvas ||
+    !overlayCanvas || !statusText ||
+    !overlayContext) {
+    console.error(
+        "STARGAZING: HTML element missing. Check element IDs."
+    );
+
+    if (statusText) {
+        statusText.textContent =
+            "HTML Error: ตรวจสอบ ID ขององค์ประกอบ";
+    }
+}
 
 
 // ========================================
 // WEBSOCKET → NODE.JS
 // ========================================
 
-let socket = null;
-
-let websocketConnected = false;
-
-
-// ========================================
-// CLOUDFLARE WEBSOCKET URL
-// ========================================
-
-const WEBSOCKET_URL = "wss://recovery-nose-evanescence-wolf.trycloudflare.com";
-const HTTP_URL = "https://what-coordinated-drives-quotes.trycloudflare.com/xy";
-
-
-
-
-
-
-// ========================================
-// จำกัดความถี่การส่ง X/Y
-// ========================================
-
-let lastSendTime = 0;
-
-const SEND_INTERVAL = 50;
-
-
-// ========================================
-// เชื่อมต่อ WebSocket
-// ========================================
-
 function connectOSCBridge() {
+    if (
+        socket &&
+        (socket.readyState === WebSocket.OPEN ||
+         socket.readyState === WebSocket.CONNECTING)
+    ) {
+        return;
+    }
 
-    console.log(
-        "================================"
-    );
-
-    console.log(
-        "กำลังเชื่อมต่อ WebSocket..."
-    );
-
-    console.log(
-        WEBSOCKET_URL
-    );
-
-    console.log(
-        "================================"
-    );
-
+    console.log("กำลังเชื่อมต่อ WebSocket...", WEBSOCKET_URL);
 
     try {
+        socket = new WebSocket(WEBSOCKET_URL);
 
-        socket =
-            new WebSocket(
-                WEBSOCKET_URL
+        socket.onopen = function () {
+            websocketConnected = true;
+            console.log("WebSocket Connected!");
+        };
+
+        socket.onerror = function (error) {
+            websocketConnected = false;
+            console.error("WebSocket Error:", error);
+        };
+
+        socket.onclose = function (event) {
+            websocketConnected = false;
+
+            console.log(
+                "WebSocket Closed:",
+                event.code,
+                event.reason
             );
 
+            setTimeout(connectOSCBridge, 2000);
+        };
+    } catch (error) {
+        websocketConnected = false;
+        console.error("WebSocket Setup Error:", error);
 
-        // --------------------------------
-        // เชื่อมต่อสำเร็จ
-        // --------------------------------
-
-        socket.onopen =
-            function () {
-
-                websocketConnected =
-                    true;
-
-                console.log(
-                    "✅ WebSocket Connected!"
-                );
-
-                console.log(
-                    "พร้อมส่ง X/Y ไป Node.js"
-                );
-
-            };
-
-
-        // --------------------------------
-        // มี Error
-        // --------------------------------
-
-        socket.onerror =
-            function (error) {
-
-                websocketConnected =
-                    false;
-
-                console.error(
-                    "❌ WebSocket Error:",
-                    error
-                );
-
-            };
-
-
-        // --------------------------------
-        // หลุดการเชื่อมต่อ
-        // --------------------------------
-
-        socket.onclose =
-            function (event) {
-
-                websocketConnected =
-                    false;
-
-                console.log(
-                    "⚠️ WebSocket Closed",
-                    event.code,
-                    event.reason
-                );
-
-
-                // พยายามเชื่อมต่อใหม่
-                setTimeout(
-                    connectOSCBridge,
-                    2000
-                );
-
-            };
-
+        setTimeout(connectOSCBridge, 2000);
     }
-
-    catch (error) {
-
-        websocketConnected =
-            false;
-
-        console.error(
-            "❌ WebSocket Setup Error:",
-            error
-        );
-
-
-        setTimeout(
-            connectOSCBridge,
-            2000
-        );
-
-    }
-
 }
 
 
 // ========================================
-// ส่ง X/Y ไป Node.js
+// SEND X/Y TO NODE.JS
 // ========================================
 
-function sendXYToServer(
-    x,
-    y
-) {
+function sendXYToServer(x, y) {
+    const now = performance.now();
 
-    // --------------------------------
-    // จำกัดความถี่
-    // 50 ms = 20 ครั้ง / วินาที
-    // --------------------------------
-
-    const now =
-        performance.now();
-
-    if (
-        now - lastSendTime <
-        SEND_INTERVAL
-    ) {
-
+    if (now - lastSendTime < SEND_INTERVAL) {
         return;
-
     }
 
-    lastSendTime =
-        now;
+    lastSendTime = now;
 
+    const safeX = Math.max(0, Math.min(1, Number(x)));
+    const safeY = Math.max(0, Math.min(1, Number(y)));
 
-    // --------------------------------
-    // จำกัด X/Y ให้อยู่ 0 - 1
-    // --------------------------------
-
-    const safeX =
-        Math.max(
-            0,
-            Math.min(
-                1,
-                Number(x)
-            )
-        );
-
-    const safeY =
-        Math.max(
-            0,
-            Math.min(
-                1,
-                Number(y)
-            )
-        );
-
-
-    // --------------------------------
-    // ส่ง HTTP POST
-    // --------------------------------
-
-    fetch(
-        HTTP_URL,
-        {
-
-            method: "POST",
-
-            headers: {
-                "Content-Type":
-                    "application/json"
-            },
-
-            body: JSON.stringify({
-
-                x: safeX,
-                y: safeY
-
-            })
-
-        }
-    )
-
+    fetch(HTTP_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            x: safeX,
+            y: safeY
+        })
+    })
     .then(response => {
-
         if (!response.ok) {
-
-            throw new Error(
-                "HTTP " +
-                response.status
-            );
-
+            throw new Error("HTTP " + response.status);
         }
 
         return response.json();
-
     })
-
     .then(data => {
-
-        console.log(
-            "📡 SEND X:",
-            safeX.toFixed(3),
-            "Y:",
-            safeY.toFixed(3)
-        );
-
+        // Avoid logging every frame.
     })
-
     .catch(error => {
-
-        console.error(
-            "❌ ส่ง X/Y ไม่สำเร็จ:",
-            error
-        );
-
+        console.error("ส่ง X/Y ไม่สำเร็จ:", error);
     });
-
 }
-
-
 
 
 // ========================================
@@ -324,1408 +179,790 @@ function sendXYToServer(
 // ========================================
 
 function resizeOverlay() {
+    if (!overlayCanvas) return;
 
-    overlayCanvas.width =
-        window.innerWidth;
-
-    overlayCanvas.height =
-        window.innerHeight;
-
+    overlayCanvas.width = window.innerWidth;
+    overlayCanvas.height = window.innerHeight;
 }
 
-
-window.addEventListener(
-    "resize",
-    resizeOverlay
-);
-
-
+window.addEventListener("resize", resizeOverlay);
 resizeOverlay();
 
 
 // ========================================
-// เปิดกล้อง
+// OPEN CAMERA
 // ========================================
 
-startButton.addEventListener(
-    "click",
-    async function () {
+if (startButton && camera) {
+    startButton.addEventListener("click", async function () {
+        console.log("กดปุ่มเปิดกล้องแล้ว");
+
+        if (cameraStarted) {
+            console.log("กล้องเปิดอยู่แล้ว");
+            return;
+        }
 
         try {
+            if (
+                !navigator.mediaDevices ||
+                !navigator.mediaDevices.getUserMedia
+            ) {
+                throw new Error(
+                    "เบราว์เซอร์ไม่รองรับการเปิดกล้อง " +
+                    "ตรวจสอบว่าเว็บเปิดผ่าน HTTPS"
+                );
+            }
 
+            if (statusText) {
+                statusText.textContent = "กำลังขอเปิดกล้อง...";
+            }
+
+            // Request camera permission directly from the button click.
             const stream =
-                await navigator.mediaDevices
-                    .getUserMedia({
+                await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: {
+                            ideal: "environment"
+                        }
+                    },
+                    audio: false
+                });
 
-                        video: {
+            camera.srcObject = stream;
 
-                            facingMode:
-                                "environment"
+            // Wait until the video can play.
+            await new Promise((resolve, reject) => {
+                if (
+                    camera.readyState >=
+                    HTMLMediaElement.HAVE_METADATA
+                ) {
+                    resolve();
+                    return;
+                }
 
-                        },
+                const onLoaded = () => {
+                    cleanup();
+                    resolve();
+                };
 
-                        audio: false
+                const onError = () => {
+                    cleanup();
+                    reject(
+                        new Error("ไม่สามารถโหลดภาพจากกล้องได้")
+                    );
+                };
 
-                    });
+                const cleanup = () => {
+                    camera.removeEventListener(
+                        "loadedmetadata",
+                        onLoaded
+                    );
 
+                    camera.removeEventListener(
+                        "error",
+                        onError
+                    );
+                };
 
-            camera.srcObject =
-                stream;
+                camera.addEventListener(
+                    "loadedmetadata",
+                    onLoaded,
+                    { once: true }
+                );
 
+                camera.addEventListener(
+                    "error",
+                    onError,
+                    { once: true }
+                );
+            });
 
-            cameraStarted =
-                true;
+            await camera.play();
 
+            cameraStarted = true;
 
-            startButton.style.display =
-                "none";
-
+            startButton.style.display = "none";
 
             statusText.textContent =
                 "เปิดกล้องแล้ว กำลังรอ OpenCV...";
 
-
-            camera.onloadedmetadata =
-                function () {
-
-                    camera.play();
-
-                    startDetection();
-
-                };
-
-        }
-
-        catch (error) {
-
-            console.error(error);
-
-            alert(
-                "ไม่สามารถเปิดกล้องได้"
+            console.log(
+                "Camera started:",
+                camera.videoWidth,
+                camera.videoHeight
             );
 
-        }
+            startDetection();
 
-    }
-);
+        } catch (error) {
+            console.error("Camera Error:", error);
+
+            // Stop any partially opened stream.
+            if (camera && camera.srcObject) {
+                camera.srcObject
+                    .getTracks()
+                    .forEach(track => track.stop());
+
+                camera.srcObject = null;
+            }
+
+            cameraStarted = false;
+
+            if (statusText) {
+                statusText.textContent =
+                    "เปิดกล้องไม่สำเร็จ: " + error.message;
+            }
+
+            let message = error.message;
+
+            if (error.name === "NotAllowedError") {
+                message =
+                    "ไม่ได้รับอนุญาตให้ใช้กล้อง " +
+                    "ตรวจสอบสิทธิ์กล้องของเว็บไซต์";
+            } else if (error.name === "NotFoundError") {
+                message = "ไม่พบกล้องที่สามารถใช้งานได้";
+            } else if (error.name === "NotReadableError") {
+                message =
+                    "กล้องอาจกำลังถูกใช้งานโดยโปรแกรมอื่น";
+            } else if (error.name === "OverconstrainedError") {
+                message =
+                    "กล้องไม่รองรับการตั้งค่าที่ร้องขอ";
+            }
+
+            alert(
+                "ไม่สามารถเปิดกล้องได้\n\n" +
+                error.name + "\n" + message
+            );
+        }
+    });
+}
 
 
 // ========================================
-// ตรวจ OpenCV
+// CHECK OPENCV
 // ========================================
 
 function waitForOpenCV() {
-
-    if (
-
-        typeof cv !==
-            "undefined" &&
-
-        cv.Mat
-
-    ) {
-
-        return true;
-
-    }
-
-    return false;
-
+    return (
+        typeof cv !== "undefined" &&
+        !!cv.Mat &&
+        typeof cv.imread === "function"
+    );
 }
 
 
 // ========================================
-// เริ่ม Detection
+// START DETECTION
 // ========================================
 
 function startDetection() {
+    if (detectionRunning) return;
 
-    if (
-        !waitForOpenCV()
-    ) {
+    if (!cameraStarted) return;
 
-        statusText.textContent =
-            "กำลังรอ OpenCV...";
+    if (!waitForOpenCV()) {
+        statusText.textContent = "กำลังรอ OpenCV...";
 
-
-        setTimeout(
-            startDetection,
-            500
-        );
-
-
+        setTimeout(startDetection, 500);
         return;
-
     }
 
+    detectionRunning = true;
 
-    statusText.textContent =
-        "กำลังตรวจจับ TV...";
+    statusText.textContent = "กำลังตรวจจับ TV...";
 
-
-    detectTV();
-
+    requestAnimationFrame(detectTV);
 }
 
 
 // ========================================
-// จัดลำดับ 4 มุม
-//
-// 0 = TL
-// 1 = TR
-// 2 = BR
-// 3 = BL
+// ORDER FOUR CORNER POINTS
+// 0 = TL, 1 = TR, 2 = BR, 3 = BL
 // ========================================
 
 function orderPoints(points) {
+    const ordered = new Array(4);
 
-    let ordered =
-        new Array(4);
+    const sums = points.map(p => p.x + p.y);
+    const differences = points.map(p => p.x - p.y);
 
+    ordered[0] = points[sums.indexOf(Math.min(...sums))];
+    ordered[2] = points[sums.indexOf(Math.max(...sums))];
 
-    let sums =
-        points.map(
-            point =>
-                point.x +
-                point.y
-        );
+    ordered[1] = points[
+        differences.indexOf(Math.max(...differences))
+    ];
 
-
-    let differences =
-        points.map(
-            point =>
-                point.x -
-                point.y
-        );
-
-
-    let topLeftIndex =
-        sums.indexOf(
-            Math.min(
-                ...sums
-            )
-        );
-
-
-    let bottomRightIndex =
-        sums.indexOf(
-            Math.max(
-                ...sums
-            )
-        );
-
-
-    let topRightIndex =
-        differences.indexOf(
-            Math.max(
-                ...differences
-            )
-        );
-
-
-    let bottomLeftIndex =
-        differences.indexOf(
-            Math.min(
-                ...differences
-            )
-        );
-
-
-    ordered[0] =
-        points[
-            topLeftIndex
-        ];
-
-
-    ordered[1] =
-        points[
-            topRightIndex
-        ];
-
-
-    ordered[2] =
-        points[
-            bottomRightIndex
-        ];
-
-
-    ordered[3] =
-        points[
-            bottomLeftIndex
-        ];
-
+    ordered[3] = points[
+        differences.indexOf(Math.min(...differences))
+    ];
 
     return ordered;
-
 }
 
 
 // ========================================
-// แปลงพิกัด OpenCV
-// → พิกัดหน้าจอ
-//
-// รองรับ object-fit: cover
+// CAMERA COORDINATES → SCREEN COORDINATES
+// Supports object-fit: cover
 // ========================================
 
-function cameraToScreen(
-    x,
-    y,
-    imageWidth,
-    imageHeight
-) {
+function cameraToScreen(x, y, imageWidth, imageHeight) {
+    const screenWidth = window.innerWidth;
+    const screenHeight = window.innerHeight;
 
-    const screenWidth =
-        window.innerWidth;
+    const scale = Math.max(
+        screenWidth / imageWidth,
+        screenHeight / imageHeight
+    );
 
+    const displayedWidth = imageWidth * scale;
+    const displayedHeight = imageHeight * scale;
 
-    const screenHeight =
-        window.innerHeight;
-
-
-    const scale =
-        Math.max(
-
-            screenWidth /
-                imageWidth,
-
-            screenHeight /
-                imageHeight
-
-        );
-
-
-    const displayedWidth =
-        imageWidth *
-        scale;
-
-
-    const displayedHeight =
-        imageHeight *
-        scale;
-
-
-    const offsetX =
-        (
-            screenWidth -
-            displayedWidth
-        ) / 2;
-
-
-    const offsetY =
-        (
-            screenHeight -
-            displayedHeight
-        ) / 2;
-
+    const offsetX = (screenWidth - displayedWidth) / 2;
+    const offsetY = (screenHeight - displayedHeight) / 2;
 
     return {
-
-        x:
-            x * scale +
-            offsetX,
-
-        y:
-            y * scale +
-            offsetY
-
+        x: x * scale + offsetX,
+        y: y * scale + offsetY
     };
-
 }
 
 
 // ========================================
-// คำนวณ X/Y
-//
-// ใช้ Perspective Transform
+// CALCULATE NORMALIZED X/Y
 // ========================================
 
-function calculateXY(
-    tvPoints,
-    width,
-    height
-) {
+function calculateXY(tvPoints, width, height) {
+    let source = null;
+    let destination = null;
+    let transform = null;
+    let centerPoint = null;
+    let result = null;
 
     try {
+        source = cv.matFromArray(
+            4, 1, cv.CV_32FC2,
+            [
+                tvPoints[0].x, tvPoints[0].y,
+                tvPoints[1].x, tvPoints[1].y,
+                tvPoints[2].x, tvPoints[2].y,
+                tvPoints[3].x, tvPoints[3].y
+            ]
+        );
 
-        // --------------------------------
-        // จุดทั้ง 4 ของ TV
-        //
-        // TL → TR → BR → BL
-        // --------------------------------
+        destination = cv.matFromArray(
+            4, 1, cv.CV_32FC2,
+            [
+                0, 0,
+                1, 0,
+                1, 1,
+                0, 1
+            ]
+        );
 
-        let source =
-            cv.matFromArray(
+        transform = cv.getPerspectiveTransform(
+            source,
+            destination
+        );
 
-                4,
-                1,
-                cv.CV_32FC2,
+        centerPoint = cv.matFromArray(
+            1, 1, cv.CV_32FC2,
+            [width / 2, height / 2]
+        );
 
-                [
-
-                    tvPoints[0].x,
-                    tvPoints[0].y,
-
-                    tvPoints[1].x,
-                    tvPoints[1].y,
-
-                    tvPoints[2].x,
-                    tvPoints[2].y,
-
-                    tvPoints[3].x,
-                    tvPoints[3].y
-
-                ]
-
-            );
-
-
-        // --------------------------------
-        // พื้นที่ปลายทาง
-        //
-        // กำหนด TV ให้เป็น
-        // สี่เหลี่ยม 1 × 1
-        // --------------------------------
-
-        let destination =
-            cv.matFromArray(
-
-                4,
-                1,
-                cv.CV_32FC2,
-
-                [
-
-                    0,
-                    0,
-
-                    1,
-                    0,
-
-                    1,
-                    1,
-
-                    0,
-                    1
-
-                ]
-
-            );
-
-
-        // --------------------------------
-        // สร้าง Perspective Matrix
-        // --------------------------------
-
-        let transform =
-            cv.getPerspectiveTransform(
-
-                source,
-
-                destination
-
-            );
-
-
-        // --------------------------------
-        // จุดกลางกล้อง
-        // --------------------------------
-
-        let centerX =
-            width / 2;
-
-
-        let centerY =
-            height / 2;
-
-
-        let centerPoint =
-            cv.matFromArray(
-
-                1,
-                1,
-                cv.CV_32FC2,
-
-                [
-
-                    centerX,
-                    centerY
-
-                ]
-
-            );
-
-
-        // --------------------------------
-        // แปลงจุดกลาง
-        // --------------------------------
-
-        let result =
-            new cv.Mat();
-
+        result = new cv.Mat();
 
         cv.perspectiveTransform(
-
             centerPoint,
-
             result,
-
             transform
-
         );
 
+        let x = result.data32F[0];
+        let y = result.data32F[1];
 
-        // --------------------------------
-        // อ่านผล
-        // --------------------------------
+        x = Math.max(0, Math.min(1, x));
+        y = Math.max(0, Math.min(1, y));
 
-        let x =
-            result.data32F[0];
+        xText.textContent = x.toFixed(2);
+        yText.textContent = y.toFixed(2);
 
+        sendXYToServer(x, y);
 
-        let y =
-            result.data32F[1];
-
-
-        // --------------------------------
-        // จำกัดค่า 0 - 1
-        // --------------------------------
-
-        x =
-            Math.max(
-                0,
-                Math.min(
-                    1,
-                    x
-                )
-            );
-
-
-        y =
-            Math.max(
-                0,
-                Math.min(
-                    1,
-                    y
-                )
-            );
-
-
-        // --------------------------------
-        // แสดงบนหน้าเว็บ
-        // --------------------------------
-
-        xText.textContent =
-            x.toFixed(2);
-
-
-        yText.textContent =
-            y.toFixed(2);
-
-
-        // ========================================
-        // ส่ง X/Y ไป Node.js
-        // ========================================
-
-        sendXYToServer(
-            x,
-            y
-        );
-
-
-        // --------------------------------
-        // Cleanup
-        // --------------------------------
-
-        source.delete();
-
-        destination.delete();
-
-        transform.delete();
-
-        centerPoint.delete();
-
-        result.delete();
-
-
+    } catch (error) {
+        console.error("XY Error:", error);
+    } finally {
+        if (source) source.delete();
+        if (destination) destination.delete();
+        if (transform) transform.delete();
+        if (centerPoint) centerPoint.delete();
+        if (result) result.delete();
     }
-
-    catch (error) {
-
-        console.error(
-            "XY Error:",
-            error
-        );
-
-    }
-
 }
 
 
 // ========================================
-// ตรวจจับ TV
+// DETECT TV / SKY DISPLAY
 // ========================================
 
 function detectTV() {
-
-    if (!cameraStarted) {
-
-        requestAnimationFrame(
-            detectTV
-        );
-
+    if (!cameraStarted || !detectionRunning) {
+        detectionRunning = false;
         return;
-
     }
-
 
     if (
-
+        !waitForOpenCV() ||
         camera.videoWidth === 0 ||
-
         camera.videoHeight === 0
-
     ) {
-
-        requestAnimationFrame(
-            detectTV
-        );
-
+        requestAnimationFrame(detectTV);
         return;
-
     }
 
+    const width = 640;
 
-    // ====================================
-    // ขนาดภาพสำหรับ OpenCV
-    // ====================================
-
-    const width =
-        640;
-
-
-    const height =
-        Math.round(
-
-            camera.videoHeight *
-            (
-                width /
-                camera.videoWidth
-            )
-
-        );
-
-
-    canvas.width =
-        width;
-
-
-    canvas.height =
-        height;
-
-
-    // ====================================
-    // เอาภาพกล้องเข้า Canvas
-    // ====================================
-
-    const context =
-        canvas.getContext(
-            "2d"
-        );
-
-
-    context.drawImage(
-
-        camera,
-
-        0,
-        0,
-
-        width,
-        height
-
+    const height = Math.round(
+        camera.videoHeight *
+        (width / camera.videoWidth)
     );
 
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext("2d");
+
+    context.drawImage(
+        camera,
+        0, 0,
+        width, height
+    );
+
+    let src = null;
+    let gray = null;
+    let blurred = null;
+    let edges = null;
+    let contours = null;
+    let hierarchy = null;
 
     try {
+        src = cv.imread(canvas);
 
-        // =================================
-        // อ่านภาพ
-        // =================================
-
-        let src =
-            cv.imread(
-                canvas
-            );
-
-
-        // =================================
-        // Grayscale
-        // =================================
-
-        let gray =
-            new cv.Mat();
-
+        gray = new cv.Mat();
 
         cv.cvtColor(
-
             src,
-
             gray,
-
             cv.COLOR_RGBA2GRAY
-
         );
 
-
-        // =================================
-        // Blur
-        // =================================
-
-        let blurred =
-            new cv.Mat();
-
+        blurred = new cv.Mat();
 
         cv.GaussianBlur(
-
             gray,
-
             blurred,
-
-            new cv.Size(
-                5,
-                5
-            ),
-
+            new cv.Size(5, 5),
             0
-
         );
 
-
-        // =================================
-        // Canny
-        // =================================
-
-        let edges =
-            new cv.Mat();
-
+        edges = new cv.Mat();
 
         cv.Canny(
-
             blurred,
-
             edges,
-
             50,
             150
-
         );
 
-
-        // =================================
-        // Contours
-        // =================================
-
-        let contours =
-            new cv.MatVector();
-
-
-        let hierarchy =
-            new cv.Mat();
-
+        contours = new cv.MatVector();
+        hierarchy = new cv.Mat();
 
         cv.findContours(
-
             edges,
-
             contours,
-
             hierarchy,
-
             cv.RETR_LIST,
-
             cv.CHAIN_APPROX_SIMPLE
-
         );
 
-
-        // =================================
-        // หา candidate
-        // =================================
-
-        let candidates = [];
-
-
-        const imageArea =
-            width *
-            height;
-
+        const candidates = [];
+        const imageArea = width * height;
 
         for (
-
             let i = 0;
-
-            i <
-            contours.size();
-
+            i < contours.size();
             i++
-
         ) {
+            const contour = contours.get(i);
 
-            let contour =
-                contours.get(i);
+            try {
+                const area = cv.contourArea(contour);
 
+                if (area < 2500) continue;
 
-            let area =
-                cv.contourArea(
-                    contour
-                );
-
-
-            // ขนาดเล็กเกินไป
-
-            if (
-                area < 2500
-            ) {
-
-                contour.delete();
-
-                continue;
-
-            }
-
-
-            const areaRatio =
-                area /
-                imageArea;
-
-
-            // ไม่เอาเล็กเกิน
-            // และไม่เอาเต็มภาพ
-
-            if (
-
-                areaRatio < 0.02 ||
-
-                areaRatio > 0.97
-
-            ) {
-
-                contour.delete();
-
-                continue;
-
-            }
-
-
-            let perimeter =
-                cv.arcLength(
-
-                    contour,
-
-                    true
-
-                );
-
-
-            let approx =
-                new cv.Mat();
-
-
-            cv.approxPolyDP(
-
-                contour,
-
-                approx,
-
-                0.02 *
-                perimeter,
-
-                true
-
-            );
-
-
-            // =================================
-            // ต้องเป็น 4 มุม
-            // =================================
-
-            if (
-                approx.rows === 4
-            ) {
-
-                let points = [];
-
-
-                for (
-
-                    let j = 0;
-
-                    j < 4;
-
-                    j++
-
-                ) {
-
-                    let px =
-                        approx.intPtr(
-                            j,
-                            0
-                        )[0];
-
-
-                    let py =
-                        approx.intPtr(
-                            j,
-                            0
-                        )[1];
-
-
-                    points.push({
-
-                        x: px,
-
-                        y: py
-
-                    });
-
-                }
-
-
-                // จัดลำดับมุม
-
-                points =
-                    orderPoints(
-                        points
-                    );
-
-
-                // =================================
-                // Bounding Box
-                // =================================
-
-                let minX =
-                    Math.min(
-
-                        ...points.map(
-                            p => p.x
-                        )
-
-                    );
-
-
-                let maxX =
-                    Math.max(
-
-                        ...points.map(
-                            p => p.x
-                        )
-
-                    );
-
-
-                let minY =
-                    Math.min(
-
-                        ...points.map(
-                            p => p.y
-                        )
-
-                    );
-
-
-                let maxY =
-                    Math.max(
-
-                        ...points.map(
-                            p => p.y
-                        )
-
-                    );
-
-
-                const boxWidth =
-                    maxX -
-                    minX;
-
-
-                const boxHeight =
-                    maxY -
-                    minY;
-
-
-                // =================================
-                // ขนาดขั้นต่ำ
-                // =================================
+                const areaRatio = area / imageArea;
 
                 if (
-
-                    boxWidth > 80 &&
-
-                    boxHeight > 50
-
+                    areaRatio < 0.02 ||
+                    areaRatio > 0.97
                 ) {
-
-                    const ratio =
-                        boxWidth /
-                        boxHeight;
-
-
-                    // aspect ratio
-                    // ของจอแนวนอน
-
-                    if (
-
-                        ratio > 1.05 &&
-
-                        ratio < 4.5
-
-                    ) {
-
-                        candidates.push({
-
-                            area: area,
-
-                            points: points
-
-                        });
-
-                    }
-
+                    continue;
                 }
 
+                const perimeter = cv.arcLength(
+                    contour,
+                    true
+                );
+
+                const approx = new cv.Mat();
+
+                try {
+                    cv.approxPolyDP(
+                        contour,
+                        approx,
+                        0.02 * perimeter,
+                        true
+                    );
+
+                    if (approx.rows !== 4) continue;
+
+                    let points = [];
+
+                    for (let j = 0; j < 4; j++) {
+                        const point = approx.intPtr(j, 0);
+
+                        points.push({
+                            x: point[0],
+                            y: point[1]
+                        });
+                    }
+
+                    points = orderPoints(points);
+
+                    const xs = points.map(p => p.x);
+                    const ys = points.map(p => p.y);
+
+                    const minX = Math.min(...xs);
+                    const maxX = Math.max(...xs);
+                    const minY = Math.min(...ys);
+                    const maxY = Math.max(...ys);
+
+                    const boxWidth = maxX - minX;
+                    const boxHeight = maxY - minY;
+
+                    if (
+                        boxWidth <= 80 ||
+                        boxHeight <= 50
+                    ) {
+                        continue;
+                    }
+
+                    const ratio = boxWidth / boxHeight;
+
+                    if (
+                        ratio < 1.05 ||
+                        ratio > 4.5
+                    ) {
+                        continue;
+                    }
+
+                    candidates.push({
+                        area,
+                        points
+                    });
+
+                } finally {
+                    approx.delete();
+                }
+
+            } finally {
+                contour.delete();
+            }
+        }
+
+
+        // =================================
+        // SCORE CANDIDATES
+        // =================================
+
+        let bestCandidate = null;
+        let bestScore = -Infinity;
+
+        for (const candidate of candidates) {
+            const points = candidate.points;
+
+            const xs = points.map(p => p.x);
+            const ys = points.map(p => p.y);
+
+            const minX = Math.min(...xs);
+            const maxX = Math.max(...xs);
+            const minY = Math.min(...ys);
+            const maxY = Math.max(...ys);
+
+            const boxWidth = maxX - minX;
+            const boxHeight = maxY - minY;
+
+            if (boxWidth <= 0 || boxHeight <= 0) {
+                continue;
             }
 
+            const ratio = boxWidth / boxHeight;
+            const areaRatio = candidate.area / imageArea;
 
-            approx.delete();
+            const expectedRatio = 16 / 9;
 
-            contour.delete();
+            if (
+                ratio < 1.3 ||
+                ratio > 2.2 ||
+                areaRatio < 0.04 ||
+                areaRatio > 0.65
+            ) {
+                continue;
+            }
 
-        }
-
-
-        // =================================
-        // เลือก candidate ที่ใหญ่สุด
-        // =================================
-
-        let bestCandidate =
-            null;
-
-
-        if (
-            candidates.length > 0
-        ) {
-
-            candidates.sort(
-
-                (a, b) =>
-                    b.area -
-                    a.area
-
+            const ratioScore = Math.exp(
+                -2 * Math.abs(
+                    Math.log(ratio / expectedRatio)
+                )
             );
 
+            const centerX = (minX + maxX) / 2;
+            const centerY = (minY + maxY) / 2;
 
-            bestCandidate =
-                candidates[0];
+            const dx = (centerX - width / 2) / (width / 2);
+            const dy = (centerY - height / 2) / (height / 2);
 
+            const centerDistance = Math.sqrt(
+                dx * dx + dy * dy
+            );
+
+            const centerScore = Math.exp(
+                -centerDistance * 1.5
+            );
+
+            const areaScore = Math.exp(
+                -Math.abs(Math.log(areaRatio / 0.18))
+            );
+
+            let continuityScore = 0.5;
+
+            if (lastDetectedCenter !== null) {
+                const oldDx =
+                    (centerX - lastDetectedCenter.x) / width;
+
+                const oldDy =
+                    (centerY - lastDetectedCenter.y) / height;
+
+                const movement = Math.sqrt(
+                    oldDx * oldDx + oldDy * oldDy
+                );
+
+                continuityScore = Math.exp(
+                    -movement * 8
+                );
+            }
+
+            const score =
+                ratioScore * 0.40 +
+                centerScore * 0.25 +
+                areaScore * 0.15 +
+                continuityScore * 0.20;
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestCandidate = candidate;
+            }
         }
 
 
         // =================================
-        // เจอ TV
+        // HANDLE DETECTION RESULT
         // =================================
 
         if (bestCandidate) {
-
             lostFrames = 0;
 
+            const points = bestCandidate.points;
+
+            lastDetectedCenter = {
+                x: points.reduce(
+                    (sum, p) => sum + p.x, 0
+                ) / 4,
+
+                y: points.reduce(
+                    (sum, p) => sum + p.y, 0
+                ) / 4
+            };
 
             statusText.textContent =
-                "เจอรูปทรง 4 มุมแล้ว";
-
-
-            // --------------------------------
-            // วาดกรอบ
-            // --------------------------------
+                "เจอพื้นที่ภาพแล้ว";
 
             drawDetectedTV(
-
-                bestCandidate.points,
-
+                points,
                 width,
-
                 height
-
             );
-
-
-            // --------------------------------
-            // คำนวณ X/Y
-            // --------------------------------
 
             calculateXY(
-
-                bestCandidate.points,
-
+                points,
                 width,
-
                 height
-
             );
 
-        }
-
-        else {
-
+        } else {
             lostFrames++;
 
+            statusText.textContent = "กำลังหา TV...";
 
-            statusText.textContent =
-                "กำลังหา TV...";
-
-
-            if (
-
-                lostFrames >
-                maxLostFrames
-
-            ) {
-
+            if (lostFrames > maxLostFrames) {
                 clearOverlay();
 
-                lastTVPoints =
-                    null;
-
+                lastTVPoints = null;
+                lastDetectedCenter = null;
             }
-
         }
 
+    } catch (error) {
+        console.error("OpenCV Error:", error);
 
-        // =================================
-        // Cleanup
-        // =================================
-
-        src.delete();
-
-        gray.delete();
-
-        blurred.delete();
-
-        edges.delete();
-
-        contours.delete();
-
-        hierarchy.delete();
-
-
+    } finally {
+        if (src) src.delete();
+        if (gray) gray.delete();
+        if (blurred) blurred.delete();
+        if (edges) edges.delete();
+        if (contours) contours.delete();
+        if (hierarchy) hierarchy.delete();
     }
 
-    catch (error) {
-
-        console.error(
-            "OpenCV Error:",
-            error
-        );
-
-    }
-
-
-    requestAnimationFrame(
-        detectTV
-    );
-
+    requestAnimationFrame(detectTV);
 }
 
 
 // ========================================
-// วาดกรอบ TV
+// DRAW DETECTED TV
 // ========================================
 
-function drawDetectedTV(
-
-    points,
-
-    width,
-
-    height
-
-) {
-
-    // --------------------------------
-    // แปลง 4 มุมเป็น screen
-    // --------------------------------
-
-    let screenPoints =
-        points.map(
-
-            point =>
-
-                cameraToScreen(
-
-                    point.x,
-
-                    point.y,
-
-                    width,
-
-                    height
-
-                )
-
-        );
-
-
-    // --------------------------------
-    // Smooth
-    // --------------------------------
-
-    if (
-        lastTVPoints === null
-    ) {
-
-        lastTVPoints =
-            screenPoints.map(
-
-                point => ({
-
-                    x: point.x,
-
-                    y: point.y
-
-                })
-
-            );
-
-    }
-
-    else {
-
-        const smooth =
-            0.25;
-
-
-        for (
-
-            let i = 0;
-
-            i < 4;
-
-            i++
-
-        ) {
-
-            lastTVPoints[i].x +=
-
-                (
-
-                    screenPoints[i].x -
-
-                    lastTVPoints[i].x
-
-                ) *
-
-                smooth;
-
-
-            lastTVPoints[i].y +=
-
-                (
-
-                    screenPoints[i].y -
-
-                    lastTVPoints[i].y
-
-                ) *
-
-                smooth;
-
-        }
-
-    }
-
-
-    // --------------------------------
-    // ล้างกรอบเก่า
-    // --------------------------------
-
-    overlayContext.clearRect(
-
-        0,
-
-        0,
-
-        overlayCanvas.width,
-
-        overlayCanvas.height
-
+function drawDetectedTV(points, width, height) {
+    const screenPoints = points.map(point =>
+        cameraToScreen(
+            point.x,
+            point.y,
+            width,
+            height
+        )
     );
 
+    if (lastTVPoints === null) {
+        lastTVPoints = screenPoints.map(point => ({
+            x: point.x,
+            y: point.y
+        }));
+    } else {
+        const smooth = 0.25;
 
-    // --------------------------------
-    // เริ่มวาดกรอบ
-    // --------------------------------
+        for (let i = 0; i < 4; i++) {
+            lastTVPoints[i].x +=
+                (screenPoints[i].x - lastTVPoints[i].x) *
+                smooth;
+
+            lastTVPoints[i].y +=
+                (screenPoints[i].y - lastTVPoints[i].y) *
+                smooth;
+        }
+    }
+
+    overlayContext.clearRect(
+        0,
+        0,
+        overlayCanvas.width,
+        overlayCanvas.height
+    );
 
     overlayContext.beginPath();
 
-
     overlayContext.moveTo(
-
         lastTVPoints[0].x,
-
         lastTVPoints[0].y
-
     );
 
-
-    for (
-
-        let i = 1;
-
-        i < 4;
-
-        i++
-
-    ) {
-
+    for (let i = 1; i < 4; i++) {
         overlayContext.lineTo(
-
             lastTVPoints[i].x,
-
             lastTVPoints[i].y
-
         );
-
     }
-
 
     overlayContext.closePath();
 
-
-    // --------------------------------
-    // เส้น
-    // --------------------------------
-
-    overlayContext.strokeStyle =
-        "lime";
-
-
-    overlayContext.lineWidth =
-        4;
-
-
+    overlayContext.strokeStyle = "lime";
+    overlayContext.lineWidth = 4;
     overlayContext.stroke();
 
-
-    // --------------------------------
-    // จุดมุม
-    // --------------------------------
-
-    for (
-
-        const point of lastTVPoints
-
-    ) {
-
+    for (const point of lastTVPoints) {
         overlayContext.beginPath();
 
-
         overlayContext.arc(
-
             point.x,
-
             point.y,
-
             7,
-
             0,
-
             Math.PI * 2
-
         );
 
-
-        overlayContext.fillStyle =
-            "lime";
-
-
+        overlayContext.fillStyle = "lime";
         overlayContext.fill();
-
     }
 
-
-    // --------------------------------
-    // Label
-    // --------------------------------
-
-    overlayContext.font =
-        "bold 14px Arial";
-
-
-    overlayContext.fillStyle =
-        "lime";
-
+    overlayContext.font = "bold 14px Arial";
+    overlayContext.fillStyle = "lime";
 
     overlayContext.fillText(
-
         "TL",
-
         lastTVPoints[0].x + 10,
-
         lastTVPoints[0].y - 10
-
     );
 
-
     overlayContext.fillText(
-
         "TR",
-
         lastTVPoints[1].x + 10,
-
         lastTVPoints[1].y - 10
-
     );
 
-
     overlayContext.fillText(
-
         "BR",
-
         lastTVPoints[2].x + 10,
-
         lastTVPoints[2].y + 25
-
     );
-
 
     overlayContext.fillText(
-
         "BL",
-
         lastTVPoints[3].x - 30,
-
         lastTVPoints[3].y + 25
-
     );
-
 }
 
 
 // ========================================
-// ล้าง Overlay
+// CLEAR OVERLAY
 // ========================================
 
 function clearOverlay() {
+    if (!overlayContext || !overlayCanvas) return;
 
     overlayContext.clearRect(
-
         0,
-
         0,
-
         overlayCanvas.width,
-
         overlayCanvas.height
-
     );
-
 }
+
+
+// ========================================
+// INITIALIZE
+// ========================================
+
+connectOSCBridge();
+
+console.log("STARGAZING initialization complete");
+
